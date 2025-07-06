@@ -37,6 +37,7 @@ const initialGameState = {
     castlingRights: { w: { kingSide: true, queenSide: true }, b: { kingSide: true, queenSide: true } },
     moveHistory: [],
     currentVotes: {},
+    fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
     totalVotesInRound: 0,
 };
 
