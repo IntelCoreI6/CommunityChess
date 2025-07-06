@@ -1,3 +1,37 @@
+// Import the functions you need from the SDKs you need
+import { initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getDatabase, ref, set, onValue, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
+
+// Your web app's Firebase configuration
+const firebaseConfig = {
+  apiKey: "AIzaSyBN1-m8zZUaB_PzBTmqzCd-0Meq6pTVp00",
+  authDomain: "community-chess-7de3a.firebaseapp.com",
+  projectId: "community-chess-7de3a",
+  storageBucket: "community-chess-7de3a.firebasestorage.app",
+  messagingSenderId: "564950810071",
+  appId: "1:564950810071:web:66337708547537dd701f92"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getDatabase();
+const gameRef = ref(db,"gamestate")
+
+let localGameState = {};
+
+onValue(gameRef, (snapshot) => {
+    const serverState = snapshot.val();
+    if (serverState) {
+        localGameState = serverState;
+        // When data changes, re-render the entire board view
+        renderBoard(serverState.board); 
+        // And update the voting panel
+        display_voting(serverState.currentVotes, serverState.totalVotesInRound);
+    }
+});
+
 
 
 //board creation
@@ -39,39 +73,47 @@ for (let y = 0; y < 9; y++) { // Changed to 10 to accommodate numbers
 
 //voting system
 
-let votes = {}
-let total_votes = 0
-let moving = false
-let selected_piece = null
+let selectedSquare = null
 board.addEventListener('click', function(event){
-    if (event.target.classList.contains('block') && moving == false)  {
-    let clickedSquare = event.target;
+    const clickedElement = event.target
+    if (clickedElement.classList.contains('piece')){
+        const square = clickedElement.parentElement;
+        selectedSquare = {
+            x: letters.indexOf(square.dataset.x),
+            y: parseInt(square.dataset.y) - 1
+        };
+    } else if (clickedElement.classList.contains('block') && selectedSquare) {
+        const destSquare = {
+            x: letters.indexOf(clickedElement.dataset.x),
+            y: parseInt(clickedElement.dataset.y) - 1
+        };
 
-    // Now you can access properties of the clicked square
-    console.log('Clicked square:', clickedSquare);
-    let coo = clickedSquare.dataset.x + clickedSquare.dataset.y
-    if (coo in votes) {
-        votes[coo]++;
-    }
-    else {
-        votes[coo] = 1
-    }
-    total_votes++
-    
-    console.log(`Added 1 vote to ${coo}`)
-    display_voting(votes, total_votes)
-    
+        // Check if the move is valid using the NEW function
+        if (isMoveValid(selectedSquare.x, selectedSquare.y, destSquare.x, destSquare.y, localGameState.board)) {
+            // This is a valid move, so let's VOTE for it.
+            const fromAlg = letters[selectedSquare.x] + (selectedSquare.y + 1); // "e2"
+            const toAlg = letters[destSquare.x] + (destSquare.y + 1); // "e4"
+            const moveKey = fromAlg + toAlg; // "e2e4"
 
-}
-else if (event.target.classList.contains('block') && moving == true)  {
-    move_piece(selected_piece, event.target)
-}
-else if (event.target.classList.contains('piece')) {
-    moving = true
-    selected_piece = event.target
-    
-}
-}); 
+            console.log(`User wants to vote for move: ${moveKey}`);
+            
+            // **NEW**: Instead of moving the piece, you update Firebase.
+            // This uses a transaction to safely increment the vote count.
+            const voteRef = ref(db, `gamestate/currentVotes/${moveKey}`);
+            runTransaction(voteRef, (currentVotes) => {
+                return (currentVotes || 0) + 1;
+            });
+            const voteRefTotal = ref(db, "gamestate/totalVotesInRound")
+            runTransaction(voteRefTotal, (totalVotesInRound) => {
+                return (totalVotesInRound || 0) + 1;
+            })
+            
+
+
+        }
+        selectedSquare = null; // Reset selection
+    }
+});
 
 
 
@@ -95,121 +137,120 @@ function display_voting (votes, total_votes){
 
 //game logic
 
-
-function piece_generation() {
-    const initialSetup = [
+let boardState = [
         ['br', 'bn', 'bb', 'bq', 'bk', 'bb', 'bn', 'br'], 
         ['bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp'], 
         [null, null, null, null, null, null, null, null],
         [null, null, null, null, null, null, null, null],
-        [null, null, null, null, null, null, null, null],
+        [null, null, null, "wk", null, null, null, null],
         [null, null, null, null, null, null, null, null],
         ['wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp'], 
         ['wr', 'wn', 'wb', 'wq', 'wk', 'wb', 'wn', 'wr']  
     ];
-for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
-            const piece = initialSetup[row][col];
 
+
+function renderBoard(currentBoardState) {
+    const allPieces = document.querySelectorAll('.piece');
+    allPieces.forEach(p => p.remove());
+    for (let y = 0; y <8; y++) {
+        for(let x = 0; x <8; x++) {
+            const piece = currentBoardState && currentBoardState[y] ? currentBoardState[y][x] : null; // fix: a weird error to fix the null handeling of empty squares in firebase
             if (piece) {
-                // Create an image element for the piece
-                let pieceElement = document.createElement('img');
-                pieceElement.className = 'piece';
-                pieceElement.dataset.type = piece
-
-
-                // Set the image source
-                pieceElement.src = `pieces/${piece}.png`; // Assuming images are in "pieces" folder
-
-                // Determine the square to place the piece on
-                let square = document.querySelector(`[data-x="${letters[col]}"][data-y="${row + 1}"]`);
-
-                if (square) {
-                    square.appendChild(pieceElement);
-                }
+                const pieceElement = document.createElement('img');
+                pieceElement.className = "piece"
+                pieceElement.dataset.type = piece;
+                pieceElement.src = `pieces/${piece}.png`;
+                const square = document.querySelector(`[data-x="${letters[x]}"][data-y="${y + 1}"]`);
+                square.appendChild(pieceElement)
             }
         }
     }
 }
 
-function isPathBlocked(start_x_index, start_y, end_x_index, end_y) {
-    let x_direction = 0;
-    let y_direction = 0;
-    if (start_x_index < end_x_index) {
-        x_direction = 1
+
+
+
+function isPathBlocked(startX, startY, endX, endY, boardState) {
+    // Use the function's parameters, not global variables
+    let x_direction = Math.sign(endX - startX);
+    let y_direction = Math.sign(endY - startY);
+
+    let currentX = startX + x_direction;
+    let currentY = startY + y_direction;
+
+    while (currentX !== endX || currentY !== endY) {
+       // Check the array using [y][x] format
+       if (boardState[currentY] && boardState[currentY][currentX] !== null) {
+            return true; // Path is blocked
+        }
+        currentX += x_direction;
+        currentY += y_direction;
     }
-    else if (start_x_index > end_x_index) {
-        x_direction = -1
+    return false; // Path is clear
+}
+
+
+function isMoveValid(fromX, fromY, toX, toY, boardState) {
+        const piece = boardState && boardState[fromY] ? boardState[fromY][fromX] : null;
+    if (!piece) return false;
+    const type = piece[1];
+    const color = piece[0]
+    const destinationPiece = boardState && boardState[toY] ? boardState[toY][toX] : null;
+
+    if (destinationPiece && destinationPiece[0] === color) {
+        return false;
     }
 
-    if (start_y < end_y) {
-        y_direction = 1
-    }
-    else if (start_y > end_y) {
-        y_direction = -1
-    }
-    let current_x = start_x_index + x_direction;
-    let current_y = start_y + y_direction;
-    while (current_x != end_x_index || current_y != end_y) {
-        let x = letters[current_x];
-        let y = current_y;
-        let square = document.querySelector(`[data-x="${x}"][data-y="${y}"]`);
-            if (square.hasChildNodes()) {
-                console.log("path is blocked")
-                console.log(`destination: x${end_x_index} y:${end_y} `)
-                console.log(`direction: x${x_direction} y:${y_direction} `)
-                console.log(`a piece is blocking this coordinate: ${current_x} ${current_y} `)
+
+    if (type === "p") {
+        const direction = color === 'w' ? -1 : 1;
+        const startRow = color === 'w' ? 6 : 1;
+
+        // Standard 1-square move
+        if (fromX === toX && toY === fromY + direction && !destinationPiece) {
+            return true;
+        }
+        // 2-square move from start
+        if (fromY === startRow && fromX === toX && toY === fromY + (2 * direction) && !destinationPiece) {
+            // Check if path is blocked for the 2-square move
+            if (boardState[fromY + direction] && !boardState[fromY + direction][fromX]) {
                 return true;
             }
-        current_x += x_direction
-        current_y += y_direction
+        }
+        // Capture move
+        if (Math.abs(fromX - toX) === 1 && toY === fromY + direction && destinationPiece) {
+            return true;
+        }
+        return false; // Not a valid pawn move
     }
+
+    if (type === "r") {
+        if (fromX !== toX && fromY !== toY) return false; // Must be straight line
+        return !isPathBlocked(fromX, fromY, toX, toY, boardState);
+    }
+    if (type === "b") {
+        if (Math.abs(toX - fromX) !== Math.abs(toY - fromY)) return false; // Must be diagonal
+        return !isPathBlocked(fromX, fromY, toX, toY, boardState);
+    }
+    if (type === "k") {
+        const dx = Math.abs(toX - fromX);
+        const dy = Math.abs(toY - fromY);
+        return dx <= 1 && dy <= 1; // Can move 1 square in any direction
+    }
+    if (type === "q") {
+        const isStraight = fromX === toX || fromY === toY;
+        const isDiagonal = Math.abs(toX - fromX) === Math.abs(toY - fromY);
+        if (!isStraight && !isDiagonal) return false;
+        return !isPathBlocked(fromX, fromY, toX, toY, boardState);
+    }
+    if (type === "n") {
+        const dx = Math.abs(toX - fromX);
+        const dy = Math.abs(toY - fromY);
+        return (dx === 1 && dy === 2) || (dx === 2 && dy === 1);
+    }
+
     return false;
-}
 
-
-function move_piece(piece, destination) {
-    let type = piece.dataset.type[1]
-    let start_x = piece.parentElement.dataset.x 
-    let start_y = piece.parentElement.dataset.y
-    let end_x = destination.dataset.x
-    let end_y = destination.dataset.y
-    let start_x_index = letters.indexOf(start_x)
-    let end_x_index = letters.indexOf(end_x)
-    let start_y_index = parseInt(start_y)
-    let end_y_index = parseInt(end_y)
-    let color = piece.dataset.type[0]
-    let direction = (color == "w") ? -1 : 1
-    if (type == "p") {
-        if (start_x_index == end_x_index && end_y_index == start_y_index + direction) {
-            destination.appendChild(piece)
-            moving = false
-        }
-        else {
-            moving = false
-        }
-        }
-    if (type == "r") {
-        console.log("rook movement activated")
-        if ((start_x_index == end_x_index || start_y == end_y) && isPathBlocked(start_x_index, start_y_index, end_x_index, end_y_index) == false) {
-            destination.appendChild(piece)
-            moving = false
-        }
-        else {
-            moving = false
-        }
-    }
-    if (type == "b")
-        if ((Math.abs(start_x_index-end_x_index)==Math.abs(start_y-end_y)) && isPathBlocked(start_x_index, start_y_index, end_x_index, end_y_index) == false){
-            destination.appendChild(piece)
-            moving = false
-        }
-        else {
-            console.log("moving failed")
-            moving = false
-        }
 
 
     }
-
-piece_generation();
