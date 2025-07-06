@@ -63,12 +63,13 @@ board.addEventListener('click', function(event){
     
 
 }
-if (event.target.classList.contains('block') && moving == true)  {
+else if (event.target.classList.contains('block') && moving == true)  {
     move_piece(selected_piece, event.target)
 }
-if (event.target.classList.contains('piece')) {
+else if (event.target.classList.contains('piece')) {
     moving = true
     selected_piece = event.target
+    
 }
 }); 
 
@@ -130,20 +131,57 @@ for (let row = 0; row < 8; row++) {
         }
     }
 }
+
+function isPathBlocked(start_x_index, start_y, end_x_index, end_y) {
+    let x_direction = 0;
+    let y_direction = 0;
+    if (start_x_index < end_x_index) {
+        x_direction = 1
+    }
+    else if (start_x_index > end_x_index) {
+        x_direction = -1
+    }
+
+    if (start_y < end_y) {
+        y_direction = 1
+    }
+    else if (start_y > end_y) {
+        y_direction = -1
+    }
+    let current_x = start_x_index + x_direction;
+    let current_y = start_y + y_direction;
+    while (current_x != end_x_index || current_y != end_y) {
+        let x = letters[current_x];
+        let y = current_y;
+        let square = document.querySelector(`[data-x="${x}"][data-y="${y}"]`);
+            if (square.hasChildNodes()) {
+                console.log("path is blocked")
+                console.log(`destination: x${end_x_index} y:${end_y} `)
+                console.log(`direction: x${x_direction} y:${y_direction} `)
+                console.log(`a piece is blocking this coordinate: ${current_x} ${current_y} `)
+                return true;
+            }
+        current_x += x_direction
+        current_y += y_direction
+    }
+    return false;
+}
+
+
 function move_piece(piece, destination) {
-    let type = piece.dataset.type[1] 
+    let type = piece.dataset.type[1]
+    let start_x = piece.parentElement.dataset.x 
+    let start_y = piece.parentElement.dataset.y
+    let end_x = destination.dataset.x
+    let end_y = destination.dataset.y
+    let start_x_index = letters.indexOf(start_x)
+    let end_x_index = letters.indexOf(end_x)
+    let start_y_index = parseInt(start_y)
+    let end_y_index = parseInt(end_y)
+    let color = piece.dataset.type[0]
+    let direction = (color == "w") ? -1 : 1
     if (type == "p") {
-        let start_x = piece.parentElement.dataset.x 
-        let start_y = piece.parentElement.dataset.y
-        let end_x = destination.dataset.x
-        let end_y = destination.dataset.y
-        let start_x_index = letters.indexOf(start_x)
-        let end_x_index = letters.indexOf(end_x)
-        let start_y_index = parseInt(start_y)
-        let end_y_index = parseInt(end_y)
-        let color = piece.dataset.type[0]
-        let direction = (color == "w") ? -1 : 1
-        if (start_x == end_x && parseInt(end_y) == parseInt(start_y) + direction) {
+        if (start_x_index == end_x_index && end_y_index == start_y_index + direction) {
             destination.appendChild(piece)
             moving = false
         }
@@ -151,7 +189,25 @@ function move_piece(piece, destination) {
             moving = false
         }
         }
-    if (type == )
+    if (type == "r") {
+        console.log("rook movement activated")
+        if ((start_x_index == end_x_index || start_y == end_y) && isPathBlocked(start_x_index, start_y_index, end_x_index, end_y_index) == false) {
+            destination.appendChild(piece)
+            moving = false
+        }
+        else {
+            moving = false
+        }
+    }
+    if (type == "b")
+        if ((Math.abs(start_x_index-end_x_index)==Math.abs(start_y-end_y)) && isPathBlocked(start_x_index, start_y_index, end_x_index, end_y_index) == false){
+            destination.appendChild(piece)
+            moving = false
+        }
+        else {
+            console.log("moving failed")
+            moving = false
+        }
 
 
     }
