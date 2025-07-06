@@ -117,6 +117,9 @@ board.addEventListener('click', function(event){
 
 
 
+
+
+
 function display_voting (votes, total_votes){
     let voting_panel = document.getElementById("voting_panel_list")
     voting_panel.innerHTML = '';
@@ -196,9 +199,12 @@ function isMoveValid(fromX, fromY, toX, toY, boardState) {
     const type = piece[1];
     const color = piece[0]
     const destinationPiece = boardState && boardState[toY] ? boardState[toY][toX] : null;
-
+    const orginPiece = boardState && boardState[fromY] ? boardState[fromY][fromX] : null;
     if (destinationPiece && destinationPiece[0] === color) {
         return false;
+    }
+    if (color != orginPiece[0]) {
+        console.log("moving the opponents piece, not allowed")
     }
 
 
@@ -254,3 +260,10 @@ function isMoveValid(fromX, fromY, toX, toY, boardState) {
 
 
     }
+
+
+
+const play_against_ai_btn = document.getElementById("play-AI-btn")
+play_against_ai_btn.addEventListener("click", function() {
+  
+});
