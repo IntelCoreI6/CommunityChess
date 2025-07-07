@@ -1,23 +1,8 @@
 // Import the functions you need from the SDKs you need
-import { initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getDatabase, ref, set, onValue, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
+import { db, gameRef } from "./firebase-init.js";
+import { ref, onValue, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
-// Your web app's Firebase configuration
-const firebaseConfig = {
-  apiKey: "AIzaSyBN1-m8zZUaB_PzBTmqzCd-0Meq6pTVp00",
-  authDomain: "community-chess-7de3a.firebaseapp.com",
-  projectId: "community-chess-7de3a",
-  storageBucket: "community-chess-7de3a.firebasestorage.app",
-  messagingSenderId: "564950810071",
-  appId: "1:564950810071:web:66337708547537dd701f92"
-};
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const db = getDatabase();
-const gameRef = ref(db,"gamestate")
 
 let localGameState = {};
 
@@ -140,17 +125,6 @@ function display_voting (votes, total_votes){
 
 //game logic
 
-let boardState = [
-        ['br', 'bn', 'bb', 'bq', 'bk', 'bb', 'bn', 'br'], 
-        ['bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp'], 
-        [null, null, null, null, null, null, null, null],
-        [null, null, null, null, null, null, null, null],
-        [null, null, null, "wk", null, null, null, null],
-        [null, null, null, null, null, null, null, null],
-        ['wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp'], 
-        ['wr', 'wn', 'wb', 'wq', 'wk', 'wb', 'wn', 'wr']  
-    ];
-
 
 function renderBoard(currentBoardState) {
     const allPieces = document.querySelectorAll('.piece');
@@ -194,16 +168,15 @@ function isPathBlocked(startX, startY, endX, endY, boardState) {
 
 
 function isMoveValid(fromX, fromY, toX, toY, boardState) {
-        const piece = boardState && boardState[fromY] ? boardState[fromY][fromX] : null;
+    const piece = boardState && boardState[fromY] ? boardState[fromY][fromX] : null;
     if (!piece) return false;
     const type = piece[1];
     const color = piece[0]
     const destinationPiece = boardState && boardState[toY] ? boardState[toY][toX] : null;
-    const orginPiece = boardState && boardState[fromY] ? boardState[fromY][fromX] : null;
     if (destinationPiece && destinationPiece[0] === color) {
         return false;
     }
-    if (color != orginPiece[0]) {
+    if (color != piece[0]) {
         console.log("moving the opponents piece, not allowed")
     }
 
