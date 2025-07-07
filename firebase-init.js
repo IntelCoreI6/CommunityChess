@@ -8,7 +8,8 @@ const firebaseConfig = {
   projectId: "community-chess-7de3a",
   storageBucket: "community-chess-7de3a.firebasestorage.app",
   messagingSenderId: "564950810071",
-  appId: "1:564950810071:web:66337708547537dd701f92"
+  appId: "1:564950810071:web:66337708547537dd701f92",
+  databaseURL: "https://community-chess-7de3a-default-rtdb.europe-west1.firebasedatabase.app"
 };
 
 // Initialize Firebase ONCE
