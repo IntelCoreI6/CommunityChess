@@ -1,19 +1,62 @@
 // Import the functions you need from the SDKs you need
-import { db, gameRef } from "./firebase-init.js";
+import { db, gameRef, functions } from "./firebase-init.js";
 import { ref, onValue, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
-
+// In public/backend.js, bij je andere imports
+import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
 
 let localGameState = {};
+let countdownInterval = null;
 
 onValue(gameRef, (snapshot) => {
     const serverState = snapshot.val();
     if (serverState) {
+        if (localGameState.board != serverState.board){
+            renderBoard(serverState.board); 
+        }
         localGameState = serverState;
-        // When data changes, re-render the entire board view
-        renderBoard(serverState.board); 
-        // And update the voting panel
+        
         display_voting(serverState.currentVotes, serverState.totalVotesInRound);
+
+        // --- CORRECT TIMER LOGIC ---
+
+        // Always stop any old timer before starting a new one.
+
+        if (countdownInterval) {
+            clearInterval(countdownInterval);
+        }
+        const timerElement = document.getElementById('timer');
+        const deadline = serverState.roundEndsAt;
+
+
+        // Only start a timer if the server has set a future deadline.
+        if (deadline && deadline > Date.now()) {
+            
+            // This is the "continuous loop" that runs every second.
+            countdownInterval = setInterval(() => {
+                // Calculate the difference between the deadline and right now.
+                const timeLeft = deadline - Date.now();
+
+                // If time is up, stop the loop and show 00:00.
+                if (timeLeft <= 0) {
+                    clearInterval(countdownInterval);
+                    timerElement.textContent = "00:00";
+                    return;
+                }
+
+                // Convert milliseconds to minutes and seconds for display.
+                const minutes = Math.floor(timeLeft / 60000);
+                const seconds = Math.floor((timeLeft % 60000) / 1000);
+
+                // Update the HTML with a nice "MM:SS" format.
+                timerElement.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            }, 1000); // Run every 1 second.
+
+        } else {
+            // If there's no active round, show a default display.
+            timerElement.textContent = "--:--";
+        }
+
     }
 });
 
@@ -84,14 +127,19 @@ board.addEventListener('click', function(event){
             
             // **NEW**: Instead of moving the piece, you update Firebase.
             // This uses a transaction to safely increment the vote count.
-            const voteRef = ref(db, `gamestate/currentVotes/${moveKey}`);
-            runTransaction(voteRef, (currentVotes) => {
-                return (currentVotes || 0) + 1;
-            });
-            const voteRefTotal = ref(db, "gamestate/totalVotesInRound")
-            runTransaction(voteRefTotal, (totalVotesInRound) => {
-                return (totalVotesInRound || 0) + 1;
+            const castVote = httpsCallable(functions, 'castVote');
+            castVote({ move: moveKey })
+            .then((result) => {
+                // Dit wordt uitgevoerd als de functie succesvol was
+                console.log("Server response:", result.data);
+                // Je zou hier een kleine pop-up of bevestiging aan de gebruiker kunnen tonen
             })
+            .catch((error) => {
+                // Dit wordt uitgevoerd als de functie een error gooit
+                // bv. omdat de zet illegaal was of de gebruiker niet ingelogd is
+                console.error("Error while casting vote:", error);
+                alert(`Error while voting: ${error.message}`); // Toon de foutmelding aan de gebruiker
+            });
             
 
 
