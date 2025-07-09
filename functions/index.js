@@ -13,6 +13,102 @@ initializeApp();
 
 // Define the function trigger
 
+function isPathBlocked(startX, startY, endX, endY, boardState) {
+    // Use the function's parameters, not global variables
+    let x_direction = Math.sign(endX - startX);
+    let y_direction = Math.sign(endY - startY);
+
+    let currentX = startX + x_direction;
+    let currentY = startY + y_direction;
+
+    while (currentX !== endX || currentY !== endY) {
+       // Check the array using [y][x] format
+       if (boardState[currentY] && boardState[currentY][currentX] !== null) {
+            return true; // Path is blocked
+        }
+        currentX += x_direction;
+        currentY += y_direction;
+    }
+    return false; // Path is clear
+}
+
+
+function isMoveValid(fromX, fromY, toX, toY, boardState) {
+    const piece = boardState && boardState[fromY] ? boardState[fromY][fromX] : null;
+    if (!piece) return false;
+    const type = piece[1];
+    const color = piece[0]
+    const destinationPiece = boardState && boardState[toY] ? boardState[toY][toX] : null;
+    if (destinationPiece && destinationPiece[0] === color) {
+        return false;
+    }
+    if (color != piece[0]) {
+        console.log("moving the opponents piece, not allowed")
+    }
+
+
+    if (type === "p") {
+        const direction = color === 'w' ? -1 : 1;
+        const startRow = color === 'w' ? 6 : 1;
+
+        // Standard 1-square move
+        if (fromX === toX && toY === fromY + direction && !destinationPiece) {
+            return true;
+        }
+        // 2-square move from start
+        if (fromY === startRow && fromX === toX && toY === fromY + (2 * direction) && !destinationPiece) {
+            // Check if path is blocked for the 2-square move
+            if (boardState[fromY + direction] && !boardState[fromY + direction][fromX]) {
+                return true;
+            }
+        }
+        // Capture move
+        if (Math.abs(fromX - toX) === 1 && toY === fromY + direction && destinationPiece) {
+            return true;
+        }
+        return false; // Not a valid pawn move
+    }
+
+    if (type === "r") {
+        if (fromX !== toX && fromY !== toY) return false; // Must be straight line
+        return !isPathBlocked(fromX, fromY, toX, toY, boardState);
+    }
+    if (type === "b") {
+        if (Math.abs(toX - fromX) !== Math.abs(toY - fromY)) return false; // Must be diagonal
+        return !isPathBlocked(fromX, fromY, toX, toY, boardState);
+    }
+    if (type === "k") {
+        const dx = Math.abs(toX - fromX);
+        const dy = Math.abs(toY - fromY);
+        return dx <= 1 && dy <= 1; // Can move 1 square in any direction
+    }
+    if (type === "q") {
+        const isStraight = fromX === toX || fromY === toY;
+        const isDiagonal = Math.abs(toX - fromX) === Math.abs(toY - fromY);
+        if (!isStraight && !isDiagonal) return false;
+        return !isPathBlocked(fromX, fromY, toX, toY, boardState);
+    }
+    if (type === "n") {
+        const dx = Math.abs(toX - fromX);
+        const dy = Math.abs(toY - fromY);
+        return (dx === 1 && dy === 2) || (dx === 2 && dy === 1);
+    }
+
+    return false;
+
+
+
+    }
+
+function movePiece(fromX, fromY, toX, toY, boardState) {
+    const newBoardState = JSON.parse(JSON.stringify(boardState));
+    const pieceToMove = newBoardState[fromX, fromY];
+    const destinationPiece = boardState && boardState[toY] ? boardState[toY][toX] : null;
+    newBoardState[toY, toX] = pieceToMove
+    newBoardState[fromY, fromX] = null
+    return newBoardState;
+}
+
 
 exports.processFinishedRounds = onSchedule("every 5 seconds", async (event) => {
     const db = getDatabase();
@@ -20,6 +116,9 @@ exports.processFinishedRounds = onSchedule("every 5 seconds", async (event) => {
     const gameStateSnap = await gameStateRef.once("value");
     const gameState = gameStateSnap.val();
     const now = Date.now()
+
+
+
     if (gameState && gameState.status == "VOTING" && (now > gameState.roundEndsAt)) {
         logger.log(`Round has ended. Processing results`);
         //round over
@@ -31,12 +130,13 @@ exports.processFinishedRounds = onSchedule("every 5 seconds", async (event) => {
             // Pass the turn if no one voted.
             return gameStateRef.update({
                 turn: gameState.turn === 'w' ? 'b' : 'w',
-                roundEndsAt: Date.now() + 10000, // Stop the timer
-                status: "PROCESSING_MOVE"
+                //roundEndsAt: Date.now() + 10000, // Stop the timer
+                status: "PROCESSING_MOVE",
+                lastMessage: "No votes were cast. Passing turn."
 
             });
         }
-        let winningMove = "";
+        let winningMove = {};
         let maxVotes = 0;
         for (const move in votes) {
           if (votes[move] > maxVotes) {
@@ -48,12 +148,15 @@ exports.processFinishedRounds = onSchedule("every 5 seconds", async (event) => {
 
     
         logger.log(`Winning move is ${winningMove} with ${maxVotes} votes.`);
-
+        const fromX = winningMove.fromX
+        const fromY = winningMove.fromY
+        const toX = winningMove.toX
+        const toY = winningMove.toY
         // 4. Apply the winning move to the board using chess.js.
-        const chess = new Chess(gameState.fen);
+        newBoardState = movePiece(fromX, fromY, toX, toY, gameState.board)
 
         // 5. Check if the move was legal.
-        if (chess.move(winningMove, { sloppy: true }) === null) {
+        if (isMoveValid(fromX, fromY, toX, toY) ==  false) {
             logger.error(`Winning move ${winningMove} was illegal. Resetting round.`);
             return gameStateRef.update({
                 currentVotes: {},
@@ -67,9 +170,8 @@ exports.processFinishedRounds = onSchedule("every 5 seconds", async (event) => {
         // Update the gamestate with the new position.
         return gameStateRef.update({
             status: "PROCESSING_MOVE",
-            fen: chess.fen(),
-            board: chess.board(),
-            turn: chess.turn(), // This will trigger the handleTurnChange function for the next player
+            board: newBoardState,
+            turn: gameState.turn === 'w' ? 'b' : 'w',
             lastMessage: `Community chose ${winningMove}.`
         });
     }
@@ -82,14 +184,13 @@ exports.processFinishedRounds = onSchedule("every 5 seconds", async (event) => {
 
 exports.castVote = onCall({ region: 'europe-west1' }, async (request) => {
   // The data sent from the client is in request.data
-  const move = request.data.move;
+  const toX = request.data.toX
+  const toY = request.data.toY
 
-  // You can add validation here to make sure the move is valid
-  if (!move || typeof move !== 'string') {
-    // Throwing an error will send a failure response back to the client
-    throw new HttpsError('invalid-argument', 'The function must be called with a "move" argument.');
-  }
+  const fromX = request.data.fromX
+  const fromY = request.data.fromY
 
+  const move = {fromX: fromX, fromY: fromY, toX: toX, toY: toY}
   const db = getDatabase();
   const gameStateRef = db.ref("/gamestate");
   const gameState = (await gameStateRef.once("value")).val()
@@ -99,15 +200,23 @@ exports.castVote = onCall({ region: 'europe-west1' }, async (request) => {
   if (gameState.status !== "VOTING"){
     throw new HttpsError("failed-precondition", "Not currently in a voting round.")
   }
-  if (new Chess(gameState.fen).move(move, {sloppy: true}) === null) {
-    throw new HttpsError('invalid-argument', 'The move is illegal.');
 
+  try {
+    if (isMoveValid(fromX, fromY, toX, toY, gameState.board) == false) {
+        throw new HttpsError('invalid-argument', 'The move is illegal.');
   }
+  } catch (e) {
+    logger.warn(`Validation failed for move: ${move}`)
+    throw new HttpsError('invalid-argument', `move is not valid: ${move}`)
+  }
+
+
   const voteRef = db.ref(`/gamestate/currentVotes/${move}`);
   const totalVotesRef = db.ref('/gamestate/totalVotesInRound');
-  await voteRef.transaction((v) => (v || 0) + 1);
-  await totalVotesRef.transaction((v) => (v || 0) + 1);
+  const votePromise = voteRef.transaction((v) => (v || 0) + 1);
+  const totalVotesPromise = totalVotesRef.transaction((v) => (v || 0) + 1);
 
+  await Promise.all([votePromise, totalVotesPromise])
   return { success: true };
 });
 
@@ -195,7 +304,7 @@ exports.startGame = onCall({ region: 'europe-west1' }, async(request) => {
       castlingRights: { w: { kingSide: true, queenSide: true }, b: { kingSide: true, queenSide: true } },
       moveHistory: [],
       currentVotes: {},
-      fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
+      fen: 'RNBQKBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbqkbnr w KQkq - 0 1',
       totalVotesInRound: 0,
       roundEndsAt: Date.now() + roundDurationMs,
       status: "VOTING",

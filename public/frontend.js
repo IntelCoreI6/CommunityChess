@@ -135,7 +135,7 @@ board.addEventListener('click', function(event){
             // **NEW**: Instead of moving the piece, you update Firebase.
             // This uses a transaction to safely increment the vote count.
             const castVote = httpsCallable(functions, 'castVote');
-            castVote({ move: moveKey })
+            castVote({ fromX: selectedSquare.x, fromY: selectedSquare.y, toX: destSquare.x, toY: destSquare.y })
             .then((result) => {
                 // Dit wordt uitgevoerd als de functie succesvol was
                 console.log("Server response:", result.data);
