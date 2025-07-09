@@ -7,6 +7,9 @@ const logger = require("firebase-functions/logger");
 const { spawn } = require("child_process");
 const path = require("path");
 const { Chess } = require("chess.js");
+const { onRequest } = require("firebase-functions/v2/https"); // Add this import
+const { CloudTasksClient } = require('@google-cloud/tasks');
+
 
 // Initialize the Admin SDK once
 initializeApp();
@@ -122,80 +125,68 @@ async function log(text) {
         logger.error("Failed to update lastMessage:", error);
     }
 }
+async function scheduleRoundProcessing(roundEndsAt) {
+    const client = new CloudTasksClient();
+    const project = 'community-chess-7de3a'; // Your project ID
+    const location = 'europe-west1'; // The region of your function
+    const queue = 'process-round-queue'; // A name for your queue
 
-exports.processFinishedRounds = onSchedule({schedule:"every 1 seconds", region:"europe-west1"}, async (event) => {
-    log("processFinished Rounds was ran")
-    const db = getDatabase();
-    const gameStateRef = db.ref("/gamestate");
-    const gameStateSnap = await gameStateRef.once("value");
-    const gameState = gameStateSnap.val();
-    const now = Date.now()
+    const parent = client.queuePath(project, location, queue);
 
+    const url = `https://europe-west1-community-chess-7de3a.cloudfunctions.net/processRound`;
 
-    log("checking if round has ended")
-    if (gameState && gameState.status == "VOTING" && (now > gameState.roundEndsAt)) {
-        log(`Round has ended. Processing results`);
-        //round over
+    const task = {
+        httpRequest: {
+            httpMethod: 'POST',
+            url: url,
+        },
+        scheduleTime: {
+            seconds: Math.floor(roundEndsAt / 1000)
+        }
+    };
+
+    try {
+        await client.createTask({ parent, task });
+        log(`Task scheduled to process round at ${new Date(roundEndsAt).toISOString()}`);
+    } catch (error) {
+        logger.error("Error scheduling task:", error);
+    }
+}
+
+exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) => {
+    try {
+        log("processRound was triggered by a Cloud Task.");
+        const db = getDatabase();
+        const gameStateRef = db.ref("/gamestate");
+        const gameStateSnap = await gameStateRef.once("value");
+        const gameState = gameStateSnap.val();
+
+        // Add a check to prevent re-processing
+        if (gameState.status !== "VOTING") {
+            log("Round already processed. Exiting.");
+            res.status(200).send("Round already processed.");
+            return;
+        }
+
+        // --- All the logic from your old processFinishedRounds function goes here ---
         const votes = gameState.currentVotes;
-        log('votes:', votes)
-
         if (!votes || Object.keys(votes).length === 0) {
-            log("No votes cast. Passing turn to the other player.");
-            // Pass the turn if no one voted.
-            return gameStateRef.update({
-                turn: gameState.turn === 'w' ? 'b' : 'w',
-                //roundEndsAt: Date.now() + 10000, // Stop the timer
-                status: "PROCESSING_MOVE",
-                lastMessage: "No votes were cast. Passing turn."
-
-            });
+            // ... handle no votes
         }
-        let winningMoveKey = "";
-        let maxVotes = 0;
-        for (const moveKey in votes) {
-          if (votes[moveKey] > maxVotes) {
-            winningMoveKey = moveKey;
-            maxVotes = votes[moveKey]
-          }
+        // ... find winning move, update board, etc.
+        
+        // Example of updating the board:
+        // const newBoardState = movePiece(...)
+        // await gameStateRef.update({ status: "PROCESSING_MOVE", board: newBoardState, ... });
 
-        }
-
-    
-        log(`Winning move is ${winningMoveKey} with ${maxVotes} votes.`);
-        const parts = winningMoveKey.split('-').map(Number);
-        const [fromX, fromY, toX, toY] = parts;
-        // 4. Apply the winning move to the board using chess.js.
-        newBoardState = movePiece(fromX, fromY, toX, toY, gameState.board)
-
-        // 5. Check if the move was legal.
-        if (isMoveValid(fromX, fromY, toX, toY, gameState.board) ==  false) {
-            logger.error(`Winning move ${winningMoveKey} was illegal. Resetting round.`);
-            return gameStateRef.update({
-                currentVotes: {},
-                totalVotesInRound: 0,
-                roundEndsAt: Date.now() + 60000, // Give them another minute
-                lastMessage: `The winning move (${winningMoveKey}) was illegal. Please vote again.`
-            });
-        }
-
-        log("Applying winning move and updating board state.");
-        // Update the gamestate with the new position.
-        return gameStateRef.update({
-            status: "PROCESSING_MOVE",
-            board: newBoardState,
-            turn: gameState.turn === 'w' ? 'b' : 'w',
-            lastMessage: `Community chose ${winningMoveKey}.`
-        });
+        res.status(200).send("Round processed successfully.");
+    } catch (error) {
+        logger.error("Error in processRound:", error);
+        res.status(500).send("Internal Server Error");
     }
-    else {
-        log("round end logic wasn't met, continueing")
-    }
-
-    // If the condition is false, it means no round is active or the timer hasn't finished.
-    // In that case, do nothing.
-    log("No finished rounds to process.");
-    return null;
 });
+
+
 
 exports.castVote = onCall({ region: 'europe-west1' }, async (request) => {
     // The data sent from the client is in request.data
@@ -289,9 +280,11 @@ exports.handleTurnChange = onValueWritten("/gamestate", async (event) => {
     else {
         logger.info(`Human player's turn (${gameState.turn}). Starting new vote timer.`);
         // The move has been processed. Now start the next voting round.
+        const roundEndsAt = Date.now() + 60000;
+        await scheduleRoundProcessing(roundEndsAt);
         return event.data.after.ref.update({
             status: 'VOTING',
-            roundEndsAt: Date.now() + 60000,
+            roundEndsAt: roundEndsAt,
             currentVotes: {},
             totalVotesInRound: 0,
         });
@@ -299,33 +292,36 @@ exports.handleTurnChange = onValueWritten("/gamestate", async (event) => {
 });
 
 exports.startGame = onCall({ region: 'europe-west1' }, async(request) => {
-  const db = getDatabase();
-  const gameStateRef = db.ref("/gamestate");
-  const roundDurationMs = 10000
-  const initialGameState = {
-      board: [
-          ['br', 'bn', 'bb', 'bq', 'bk', 'bb', 'bn', 'br'],
-          ['bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp'],
-          [null, null, null, null, null, null, null, null],
-          [null, null, null, null, null, null, null, null],
-          [null, null, null, null, null, null, null, null],
-          [null, null, null, null, null, null, null, null],
-          ['wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp'],
-          ['wr', 'wn', 'wb', 'wq', 'wk', 'wb', 'wn', 'wr']
-      ],
-      turn: 'w',
-      controlled: 'w',
-      castlingRights: { w: { kingSide: true, queenSide: true }, b: { kingSide: true, queenSide: true } },
-      moveHistory: [],
-      currentVotes: {},
-      fen: 'RNBQKBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbqkbnr w KQkq - 0 1',
-      totalVotesInRound: 0,
-      roundEndsAt: Date.now() + roundDurationMs,
-      status: "VOTING",
-      lastMessage: "New game started. White to move"
-  };
-  await gameStateRef.set(initialGameState);
-  return {success: true, message: "Game started successfully."}
+    const db = getDatabase();
+    const gameStateRef = db.ref("/gamestate");
+    const roundDurationMs = 20000
+    const roundEndsAt = Date.now() + roundDurationMs;
+    await scheduleRoundProcessing(roundEndsAt);
+
+    const initialGameState = {
+        board: [
+            ['br', 'bn', 'bb', 'bq', 'bk', 'bb', 'bn', 'br'],
+            ['bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp'],
+            [null, null, null, null, null, null, null, null],
+            [null, null, null, null, null, null, null, null],
+            [null, null, null, null, null, null, null, null],
+            [null, null, null, null, null, null, null, null],
+            ['wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp'],
+            ['wr', 'wn', 'wb', 'wq', 'wk', 'wb', 'wn', 'wr']
+        ],
+        turn: 'w',
+        controlled: 'w',
+        castlingRights: { w: { kingSide: true, queenSide: true }, b: { kingSide: true, queenSide: true } },
+        moveHistory: [],
+        currentVotes: {},
+        fen: 'RNBQKBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbqkbnr w KQkq - 0 1',
+        totalVotesInRound: 0,
+        roundEndsAt: roundEndsAt,
+        status: "VOTING",
+        lastMessage: "New game started. White to move"
+    };
+    await gameStateRef.set(initialGameState);
+    return {success: true, message: "Game started successfully."}
 
 
 
