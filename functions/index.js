@@ -110,7 +110,21 @@ function movePiece(fromX, fromY, toX, toY, boardState) {
 }
 
 
-exports.processFinishedRounds = onSchedule("every 5 seconds", async (event) => {
+async function log(text) {
+    logger.info(text);
+    const db = getDatabase();
+    const gameStateRef = db.ref("/gamestate");
+    try {
+        await gameStateRef.update({
+            lastMessage: `SERVER: ${text}`
+        });
+    } catch (error) {
+        logger.error("Failed to update lastMessage:", error);
+    }
+}
+
+exports.processFinishedRounds = onSchedule({schedule:"every 1 seconds", region:"europe-west1"}, async (event) => {
+    log("processFinished Rounds was ran")
     const db = getDatabase();
     const gameStateRef = db.ref("/gamestate");
     const gameStateSnap = await gameStateRef.once("value");
@@ -118,15 +132,15 @@ exports.processFinishedRounds = onSchedule("every 5 seconds", async (event) => {
     const now = Date.now()
 
 
-
+    log("checking if round has ended")
     if (gameState && gameState.status == "VOTING" && (now > gameState.roundEndsAt)) {
-        logger.log(`Round has ended. Processing results`);
+        log(`Round has ended. Processing results`);
         //round over
         const votes = gameState.currentVotes;
-        logger.log('votes:', votes)
+        log('votes:', votes)
 
         if (!votes || Object.keys(votes).length === 0) {
-            logger.log("No votes cast. Passing turn to the other player.");
+            log("No votes cast. Passing turn to the other player.");
             // Pass the turn if no one voted.
             return gameStateRef.update({
                 turn: gameState.turn === 'w' ? 'b' : 'w',
@@ -136,88 +150,88 @@ exports.processFinishedRounds = onSchedule("every 5 seconds", async (event) => {
 
             });
         }
-        let winningMove = {};
+        let winningMoveKey = "";
         let maxVotes = 0;
-        for (const move in votes) {
-          if (votes[move] > maxVotes) {
-            winningMove = move;
-            maxVotes = votes[move]
+        for (const moveKey in votes) {
+          if (votes[moveKey] > maxVotes) {
+            winningMoveKey = moveKey;
+            maxVotes = votes[moveKey]
           }
 
         }
 
     
-        logger.log(`Winning move is ${winningMove} with ${maxVotes} votes.`);
-        const fromX = winningMove.fromX
-        const fromY = winningMove.fromY
-        const toX = winningMove.toX
-        const toY = winningMove.toY
+        log(`Winning move is ${winningMoveKey} with ${maxVotes} votes.`);
+        const parts = winningMoveKey.split('-').map(Number);
+        const [fromX, fromY, toX, toY] = parts;
         // 4. Apply the winning move to the board using chess.js.
         newBoardState = movePiece(fromX, fromY, toX, toY, gameState.board)
 
         // 5. Check if the move was legal.
-        if (isMoveValid(fromX, fromY, toX, toY) ==  false) {
-            logger.error(`Winning move ${winningMove} was illegal. Resetting round.`);
+        if (isMoveValid(fromX, fromY, toX, toY, gameState.board) ==  false) {
+            logger.error(`Winning move ${winningMoveKey} was illegal. Resetting round.`);
             return gameStateRef.update({
                 currentVotes: {},
                 totalVotesInRound: 0,
                 roundEndsAt: Date.now() + 60000, // Give them another minute
-                lastMessage: `The winning move (${winningMove}) was illegal. Please vote again.`
+                lastMessage: `The winning move (${winningMoveKey}) was illegal. Please vote again.`
             });
         }
 
-        logger.log("Applying winning move and updating board state.");
+        log("Applying winning move and updating board state.");
         // Update the gamestate with the new position.
         return gameStateRef.update({
             status: "PROCESSING_MOVE",
             board: newBoardState,
             turn: gameState.turn === 'w' ? 'b' : 'w',
-            lastMessage: `Community chose ${winningMove}.`
+            lastMessage: `Community chose ${winningMoveKey}.`
         });
+    }
+    else {
+        log("round end logic wasn't met, continueing")
     }
 
     // If the condition is false, it means no round is active or the timer hasn't finished.
     // In that case, do nothing.
-    logger.info("No finished rounds to process.");
+    log("No finished rounds to process.");
     return null;
 });
 
 exports.castVote = onCall({ region: 'europe-west1' }, async (request) => {
-  // The data sent from the client is in request.data
-  const toX = request.data.toX
-  const toY = request.data.toY
+    // The data sent from the client is in request.data
+    const { fromX, fromY, toX, toY } = request.data;
+    if ([fromX, fromY, toX, toY].some(coord => typeof coord !== 'number')) {
+        throw new HttpsError('invalid-argument', 'The function must be called with fromX, fromY, toX, toY coordinates.');
+    }
+    const moveKey = `${fromX}-${fromY}-${toX}-${toY}`;
 
-  const fromX = request.data.fromX
-  const fromY = request.data.fromY
+    const db = getDatabase();
+    const gameStateRef = db.ref("/gamestate");
+    const gameState = (await gameStateRef.once("value")).val()
+        if (!gameState) {
+        throw new HttpsError('not-found', 'The game state could not be found. The game may need to be reset.');
+    }
+    if (gameState.status !== "VOTING"){
+        throw new HttpsError("failed-precondition", "Not currently in a voting round.")
+    }
 
-  const move = {fromX: fromX, fromY: fromY, toX: toX, toY: toY}
-  const db = getDatabase();
-  const gameStateRef = db.ref("/gamestate");
-  const gameState = (await gameStateRef.once("value")).val()
-    if (!gameState) {
-    throw new HttpsError('not-found', 'The game state could not be found. The game may need to be reset.');
-  }
-  if (gameState.status !== "VOTING"){
-    throw new HttpsError("failed-precondition", "Not currently in a voting round.")
-  }
-
-  try {
-    if (isMoveValid(fromX, fromY, toX, toY, gameState.board) == false) {
-        throw new HttpsError('invalid-argument', 'The move is illegal.');
-  }
-  } catch (e) {
-    logger.warn(`Validation failed for move: ${move}`)
-    throw new HttpsError('invalid-argument', `move is not valid: ${move}`)
-  }
+    try {
+        if (isMoveValid(fromX, fromY, toX, toY, gameState.board) == false) {
+            throw new HttpsError('invalid-argument', 'The move is illegal.');
+    }
+    } catch (e) {
+        logger.warn(`Validation failed for move: ${moveKey}`)
+        throw new HttpsError('invalid-argument', `move is not valid: ${moveKey}`)
+    }
 
 
-  const voteRef = db.ref(`/gamestate/currentVotes/${move}`);
-  const totalVotesRef = db.ref('/gamestate/totalVotesInRound');
-  const votePromise = voteRef.transaction((v) => (v || 0) + 1);
-  const totalVotesPromise = totalVotesRef.transaction((v) => (v || 0) + 1);
+    const voteRef = db.ref(`/gamestate/currentVotes/${moveKey}`);
+    const totalVotesRef = db.ref('/gamestate/totalVotesInRound');
+    const votePromise = voteRef.transaction((v) => (v || 0) + 1);
+    const totalVotesPromise = totalVotesRef.transaction((v) => (v || 0) + 1);
 
-  await Promise.all([votePromise, totalVotesPromise])
-  return { success: true };
+    await Promise.all([votePromise, totalVotesPromise])
+    return { success: true };
 });
 
 exports.handleTurnChange = onValueWritten("/gamestate", async (event) => {

@@ -7,6 +7,7 @@ import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/
 
 let localGameState = {};
 let countdownInterval = null;
+let locallastMessage = null
 
 onValue(gameRef, (snapshot) => {
     const serverState = snapshot.val();
@@ -27,6 +28,10 @@ onValue(gameRef, (snapshot) => {
 
         const statusDisplay = document.getElementById('game-status')
         statusDisplay.innerHTML = serverState.status
+        if (locallastMessage != serverState.lastMessage) {
+            console.log(serverState.lastMessage)
+            locallastMessage = serverState.lastMessage
+        }
         
         
         if (countdownInterval) {
