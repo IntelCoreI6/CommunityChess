@@ -17,8 +17,8 @@ resetButton.addEventListener('click', () => {
         console.log("Resetting game state in Firebase...");
         // Use set() to completely overwrite the data at gameRef with the initial state
         startGame()
-            .then(() => {
-                console.log("Game reset successfully!");
+            .then((result) => {
+                console.log("Game reset successfully!", result.data);
                 alert("Game has been reset.");
             })
             .catch((error) => {

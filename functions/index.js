@@ -12,114 +12,38 @@ const { Chess } = require("chess.js");
 initializeApp();
 
 // Define the function trigger
-exports.handleTurnChange = onValueWritten(
-  {
-    ref: "/gamestate/turn",
-    region: "europe-west1",
-    instance: "community-chess-7de3a-default-rtdb",
-    timeoutSeconds: 60,
-  },
-  async (event) => {
-    // Exit if turn was deleted or didn't change
-    if (!event.data.after.exists() || event.data.before.val() === event.data.after.val()) {
-      return null;
-    }
-
-    const db = getDatabase();
-    const gameStateRef = db.ref("/gamestate");
-    const gameStateSnap = await gameStateRef.once("value");
-    const gameState = gameStateSnap.val();
-
-    if (!gameState) {
-      logger.error("Gamestate not found!");
-      return null;
-    }
-
-    // --- This is YOUR correct logic ---
-    // Check if the current turn's color is controlled by a human player.
-    if (gameState.turn === gameState.controlled) {
-      // --- It's a HUMAN's turn. Start the timer. ---
-      logger.info(`Human player's turn (${gameState.turn}). Starting vote timer.`);
-      const roundDurationMs = 60000; // 60 seconds
-      const deadline = Date.now() + roundDurationMs;
-      
-      return gameStateRef.update({
-        roundEndsAt: deadline,
-        currentVotes: {},
-        totalVotesInRound: 0,
-      });
-
-    } else {
-      // --- It's the AI's turn. Run the Stockfish logic. ---
-      logger.info(`AI's turn (${gameState.turn}). Running Stockfish.`);
-      
-      try {
-        const fen = gameState.fen;
-        const stockfishPath = path.join(__dirname, "stockfish");
-        const stockfish = spawn(stockfishPath);
-        let bestMove = "";
-
-        stockfish.stdout.on("data", (data) => {
-          const output = data.toString();
-          if (output.startsWith("bestmove")) {
-            bestMove = output.split(" ")[1];
-          }
-        });
-
-        await new Promise((resolve, reject) => {
-          stockfish.on("close", (code) => code === 0 && bestMove ? resolve() : reject(new Error(`Stockfish failed.`)));
-          stockfish.stdin.write(`position fen ${fen}\n`);
-          stockfish.stdin.write("go movetime 2000\n");
-          stockfish.stdin.end();
-        });
-
-        const chess = new Chess(fen);
-        const moveResult = chess.move(bestMove, { sloppy: true });
-
-        if (moveResult === null) throw new Error(`Stockfish made illegal move: ${bestMove}`);
-
-        logger.log(`AI chose move: ${bestMove}. Updating database.`);
-        return gameStateRef.update({
-          fen: chess.fen(),
-          board: chess.board(),
-          turn: chess.turn(), // This correctly sets the turn to 'w' or 'b'
-        });
-
-      } catch (error) {
-        logger.error("Error during AI turn:", error);
-        // Failsafe: Give the turn back to the human to prevent a stuck game.
-        return gameStateRef.update({ turn: gameState.controlled });
-      }
-    }
-  }
-);
 
 
-exports.processFinishedRounds = onSchedule("every 2 seconds", async (event) => {
+exports.processFinishedRounds = onSchedule("every 5 seconds", async (event) => {
     const db = getDatabase();
     const gameStateRef = db.ref("/gamestate");
     const gameStateSnap = await gameStateRef.once("value");
     const gameState = gameStateSnap.val();
     const now = Date.now()
-    if (gameState && gameState.roundEndsAt && (now > gameState.roundEndsAt || gameState.roundEndsAt == 0)) {
-        logger.log("Round has ended. Processing votes...");
+    if (gameState && gameState.status == "VOTING" && (now > gameState.roundEndsAt)) {
+        logger.log(`Round has ended. Processing results`);
         //round over
         const votes = gameState.currentVotes;
+        logger.log('votes:', votes)
 
         if (!votes || Object.keys(votes).length === 0) {
             logger.log("No votes cast. Passing turn to the other player.");
             // Pass the turn if no one voted.
             return gameStateRef.update({
                 turn: gameState.turn === 'w' ? 'b' : 'w',
-                roundEndsAt: 0 // Stop the timer
+                roundEndsAt: Date.now() + 10000, // Stop the timer
+                status: "PROCESSING_MOVE"
+
             });
         }
         let winningMove = "";
         let maxVotes = 0;
         for (const move in votes) {
-          if (votes[move] > maxVotes)
-            winningMove = votes[move];
-            maxvotes = move
+          if (votes[move] > maxVotes) {
+            winningMove = move;
+            maxVotes = votes[move]
+          }
+
         }
 
     
@@ -127,27 +51,26 @@ exports.processFinishedRounds = onSchedule("every 2 seconds", async (event) => {
 
         // 4. Apply the winning move to the board using chess.js.
         const chess = new Chess(gameState.fen);
-        const moveResult = chess.move(winningMove, { sloppy: true });
 
         // 5. Check if the move was legal.
-        if (moveResult === null) {
+        if (chess.move(winningMove, { sloppy: true }) === null) {
             logger.error(`Winning move ${winningMove} was illegal. Resetting round.`);
             return gameStateRef.update({
                 currentVotes: {},
                 totalVotesInRound: 0,
-                roundEndsAt: Date.now() + 60000 // Give them another minute
+                roundEndsAt: Date.now() + 60000, // Give them another minute
+                lastMessage: `The winning move (${winningMove}) was illegal. Please vote again.`
             });
         }
 
         logger.log("Applying winning move and updating board state.");
         // Update the gamestate with the new position.
         return gameStateRef.update({
+            status: "PROCESSING_MOVE",
             fen: chess.fen(),
             board: chess.board(),
             turn: chess.turn(), // This will trigger the handleTurnChange function for the next player
-            currentVotes: {},
-            totalVotesInRound: 0,
-            roundEndsAt: 0 // Reset the timer. The next turn will set a new one.
+            lastMessage: `Community chose ${winningMove}.`
         });
     }
 
@@ -159,45 +82,102 @@ exports.processFinishedRounds = onSchedule("every 2 seconds", async (event) => {
 
 exports.castVote = onCall({ region: 'europe-west1' }, async (request) => {
   // The data sent from the client is in request.data
-  const moveKey = request.data.move;
+  const move = request.data.move;
 
   // You can add validation here to make sure the move is valid
-  if (!moveKey || typeof moveKey !== 'string') {
+  if (!move || typeof move !== 'string') {
     // Throwing an error will send a failure response back to the client
     throw new HttpsError('invalid-argument', 'The function must be called with a "move" argument.');
   }
 
   const db = getDatabase();
-  const voteRef = db.ref(`/gamestate/currentVotes/${moveKey}`);
-  const totalVotesRef = db.ref('/gamestate/totalVotesInRound');
-
-  try {
-    // Use a transaction to safely increment the vote counts
-    await voteRef.transaction((currentVotes) => {
-      return (currentVotes || 0) + 1;
-    });
-
-    await totalVotesRef.transaction((currentTotal) => {
-      return (currentTotal || 0) + 1;
-    });
-
-    logger.info(`Vote cast successfully for ${moveKey}`);
-    // Return a success message to the client
-    return { success: true, message: `Vote for ${moveKey} recorded.` };
-
-  } catch (error) {
-    logger.error("Error while casting vote:", error);
-    // Throw a generic error if something goes wrong
-    throw new HttpsError('internal', 'An error occurred while casting the vote.');
+  const gameStateRef = db.ref("/gamestate");
+  const gameState = (await gameStateRef.once("value")).val()
+    if (!gameState) {
+    throw new HttpsError('not-found', 'The game state could not be found. The game may need to be reset.');
   }
+  if (gameState.status !== "VOTING"){
+    throw new HttpsError("failed-precondition", "Not currently in a voting round.")
+  }
+  if (new Chess(gameState.fen).move(move, {sloppy: true}) === null) {
+    throw new HttpsError('invalid-argument', 'The move is illegal.');
+
+  }
+  const voteRef = db.ref(`/gamestate/currentVotes/${move}`);
+  const totalVotesRef = db.ref('/gamestate/totalVotesInRound');
+  await voteRef.transaction((v) => (v || 0) + 1);
+  await totalVotesRef.transaction((v) => (v || 0) + 1);
+
+  return { success: true };
 });
 
+exports.handleTurnChange = onValueWritten("/gamestate", async (event) => {
+    const gameState = event.data.after.val();
+    const oldGameState = event.data.before.val();
 
+    // Only act if the status has just been set to 'PROCESSING_MOVE'.
+    if (!gameState || gameState.status !== 'PROCESSING_MOVE' || oldGameState.status === 'PROCESSING_MOVE') {
+        return null;
+    }
 
-exports.startGame = onCall({region: 'europe-west1'}, async(request) => {
+    // --- AI's Turn ---
+    if (gameState.turn !== gameState.controlled) {
+        logger.info(`AI's turn (${gameState.turn}). Running Stockfish.`);
+        try {
+            const fen = gameState.fen;
+            const stockfishPath = path.join(__dirname, "stockfish");
+            const stockfish = spawn(stockfishPath);
+            let bestMove = "";
+
+            stockfish.stdout.on("data", (data) => {
+                const output = data.toString();
+                if (output.startsWith("bestmove")) {
+                    bestMove = output.split(" ")[1];
+                }
+            });
+
+            await new Promise((resolve, reject) => {
+                stockfish.on("close", (code) => code === 0 && bestMove ? resolve() : reject(new Error(`Stockfish failed.`)));
+                stockfish.stdin.write(`position fen ${fen}\n`);
+                stockfish.stdin.write("go movetime 2000\n");
+                stockfish.stdin.end();
+            });
+
+            const chess = new Chess(fen);
+            chess.move(bestMove, { sloppy: true });
+
+            // AI has moved. Now it's the human's turn again. Start a new voting round.
+            return event.data.after.ref.update({
+                status: 'VOTING',
+                fen: chess.fen(),
+                board: chess.board(),
+                turn: chess.turn(),
+                roundEndsAt: Date.now() + 60000,
+                currentVotes: {},
+                totalVotesInRound: 0,
+                lastMessage: `AI moved ${bestMove}. Your turn to vote.`
+            });
+        } catch (error) {
+            logger.error("Error during AI turn:", error);
+            return event.data.after.ref.update({ status: 'ERROR', lastMessage: 'AI failed to make a move.' });
+        }
+    }
+    // --- Human's Turn ---
+    else {
+        logger.info(`Human player's turn (${gameState.turn}). Starting new vote timer.`);
+        // The move has been processed. Now start the next voting round.
+        return event.data.after.ref.update({
+            status: 'VOTING',
+            roundEndsAt: Date.now() + 60000,
+            currentVotes: {},
+            totalVotesInRound: 0,
+        });
+    }
+});
+
+exports.startGame = onCall({ region: 'europe-west1' }, async(request) => {
   const db = getDatabase();
   const gameStateRef = db.ref("/gamestate");
-  const gameStateSnap = await gameStateRef.once("value");
   const roundDurationMs = 10000
   const initialGameState = {
       board: [
@@ -217,7 +197,9 @@ exports.startGame = onCall({region: 'europe-west1'}, async(request) => {
       currentVotes: {},
       fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
       totalVotesInRound: 0,
-      roundEndsAt: Date.now() + roundDurationMs 
+      roundEndsAt: Date.now() + roundDurationMs,
+      status: "VOTING",
+      lastMessage: "New game started. White to move"
   };
   await gameStateRef.set(initialGameState);
   return {success: true, message: "Game started successfully."}

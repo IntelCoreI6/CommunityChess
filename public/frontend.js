@@ -22,6 +22,13 @@ onValue(gameRef, (snapshot) => {
 
         // Always stop any old timer before starting a new one.
 
+        const turnElement = document.getElementById('game-turn')
+        turnElement.innerText = serverState.turn
+
+        const statusDisplay = document.getElementById('game-status')
+        statusDisplay.innerHTML = serverState.status
+        
+        
         if (countdownInterval) {
             clearInterval(countdownInterval);
         }
