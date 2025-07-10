@@ -7,17 +7,14 @@ const logger = require("firebase-functions/logger");
 const { spawn } = require("child_process");
 const path = require("path");
 const { Chess } = require("chess.js");
-const { onRequest } = require("firebase-functions/v2/https"); // Add this import
+const { onRequest } = require("firebase-functions/v2/https");
 const { CloudTasksClient } = require('@google-cloud/tasks');
 
 
-// Initialize the Admin SDK once
 initializeApp();
 
-// Define the function trigger
 
 function isPathBlocked(startX, startY, endX, endY, boardState) {
-    // Use the function's parameters, not global variables
     let x_direction = Math.sign(endX - startX);
     let y_direction = Math.sign(endY - startY);
 
@@ -113,6 +110,36 @@ function movePiece(fromX, fromY, toX, toY, boardState) {
     return newBoardState;
 }
 
+function updateCastlingRights(move, piece, currentRights) {
+    const newRights = JSON.parse(JSON.stringify(currentRights)); // Deep copy
+    const pieceType = piece[1];
+    const pieceColor = piece[0];
+
+    // If king moves, lose both side castling rights
+    if (pieceType === 'k') {
+        if (pieceColor === 'w') {
+            newRights.w.K = false;
+            newRights.w.Q = false;
+        } else {
+            newRights.b.k = false;
+            newRights.b.q = false;
+        }
+    }
+
+    // If a rook moves, lose castling rights on that side
+    if (pieceType === 'r') {
+        if (pieceColor === 'w') {
+            if (move.fromX === 0 && move.fromY === 7) newRights.w.Q = false; // a1 rook
+            if (move.fromX === 7 && move.fromY === 7) newRights.w.K = false; // h1 rook
+        } else { // black rook
+            if (move.fromX === 0 && move.fromY === 0) newRights.b.q = false; // a8 rook
+            if (move.fromX === 7 && move.fromY === 0) newRights.b.k = false; // h8 rook
+        }
+    }
+
+    return newRights;
+}
+
 async function log(...args) {
     // Convert all arguments to a single string, handling objects and errors
     const message = args.map(arg => {
@@ -170,7 +197,7 @@ async function scheduleRoundProcessing(roundEndsAt) {
 }
 // ... (put this near your other helper functions like isMoveValid) ...
 
-function boardToFen(board, turn, castlingRights) {
+function boardToFen(board, turn, castlingRights, enPassantTarget) {
     let fen = '';
     for (let y = 0; y < 8; y++) {
         let empty = 0;
@@ -205,8 +232,12 @@ function boardToFen(board, turn, castlingRights) {
     if (castlingRights.b.q) castling += 'q';
     fen += ` ${castling || '-'}`;
     
-    // For simplicity, we'll use placeholders for en passant, halfmove, and fullmove
-    fen += ' - 0 1';
+    // --- FIX IS HERE ---
+    // Use the enPassantTarget from the game state, or '-' if there is none.
+    fen += ` ${enPassantTarget || '-'}`;
+
+    // For simplicity, we'll use placeholders for halfmove and fullmove
+    fen += ' 0 1';
     return fen;
 }
 
@@ -291,6 +322,19 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
 
         log("Applying winning move and updating board state.");
         // Update the gamestate with the new position.
+        let enPassantTarget = null;
+        const piece = gameState.board[move.fromY][move.fromX];
+        // If a pawn moved two squares...
+        if (piece[1] === 'p' && Math.abs(move.toY - move.fromY) === 2) {
+            const columns = "abcdefgh";
+            // The target square is the one "behind" the pawn
+            const enPassantY = (move.fromY + move.toY) / 2;
+            enPassantTarget = columns[move.fromX] + (8 - enPassantY);
+            log("New en passant target square:", enPassantTarget);
+        }
+        const newCastlingRights = updateCastlingRights(move, piece, gameState.castlingRights)
+        log("Castling rights updated:", newCastlingRights);
+
 
         return gameStateRef.update({
             status: "PROCESSING_MOVE",
@@ -299,6 +343,8 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
             lastMessage: `Community chose ${winningMoveKey}.`,
             currentVotes: {},
             totalVotesInRound: 0,
+            castlingRights: newCastlingRights,
+            enPassantTarget: enPassantTarget,
         });
 
     } catch (error) {
@@ -361,7 +407,7 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
     if (gameState.turn !== gameState.controlled) {
         logger.info(`AI's turn (${gameState.turn}). Running Stockfish.`);
         try {
-            const fen = gameState.fen;
+            const fen = boardToFen(gameState.board, gameState.turn, gameState.castlingRights, gameState.enPassantTarget);
             const stockfishPath = path.join(__dirname, "stockfish");
             const stockfish = spawn(stockfishPath);
             let bestMove = "";
@@ -379,23 +425,39 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
                 stockfish.stdin.write("go movetime 2000\n");
                 stockfish.stdin.end();
             });
+            log(bestMove)
+            const fromX = bestMove.charCodeAt(0) - 'a'.charCodeAt(0);
+            const fromY = 8 - parseInt(bestMove[1]);
+            const toX = bestMove.charCodeAt(2) - 'a'.charCodeAt(0);
+            const toY = 8 - parseInt(bestMove[3]);
 
-            const chess = new Chess(fen);
-            chess.move(bestMove, { sloppy: true });
-
+            const aiMove = {fromX, fromY, toX, toY};
+            pieceMovedByAI = gameState.board[fromY][fromX]
+            const newCastlingRights = updateCastlingRights(aiMove, pieceMovedByAI, gameState.castlingRights);
+            
+            let enPassantTargetForNextTurn = null;
+            if (pieceMovedByAI && pieceMovedByAI[1] === 'p' && Math.abs(toY - fromY) === 2) {
+                const columns = "abcdefgh";
+                const enPassantY = (fromY + toY) / 2;
+                enPassantTargetForNextTurn = columns[fromX] + (8 - enPassantY);
+                log("AI created new en passant target:", enPassantTargetForNextTurn);
+            }
+            const newBoardState = movePiece(fromX, fromY, toX, toY, gameState.board);
             // AI has moved. Now it's the human's turn again. Start a new voting round.
             return event.data.after.ref.update({
                 status: 'VOTING',
-                fen: chess.fen(),
-                board: chess.board(),
-                turn: chess.turn(),
+                board: newBoardState,
+                turn: gameState.turn === 'w' ? 'b' : 'w',
                 roundEndsAt: Date.now() + 60000,
                 currentVotes: {},
                 totalVotesInRound: 0,
-                lastMessage: `AI moved ${bestMove}. Your turn to vote.`
+                lastMessage: `AI moved ${bestMove}. Your turn to vote.`,
+                castlingRights: newCastlingRights,
+                enPassantTarget: enPassantTargetForNextTurn
             });
         } catch (error) {
             logger.error("Error during AI turn:", error);
+            log("Error during AI turn:", error);
             return event.data.after.ref.update({ status: 'ERROR', lastMessage: 'AI failed to make a move.' });
         }
     }
@@ -417,7 +479,7 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
 exports.startGame = onCall({ region: 'europe-west1' }, async(request) => {
     const db = getDatabase();
     const gameStateRef = db.ref("/gamestate");
-    const roundDurationMs = 20000
+    const roundDurationMs = 10000
     const roundEndsAt = Date.now() + roundDurationMs;
     await scheduleRoundProcessing(roundEndsAt);
 
@@ -439,7 +501,8 @@ const initialGameState = {
         roundEndsAt: roundEndsAt,
         currentVotes: {},
         totalVotesInRound: 0,
-        castlingRights: { w: { K: true, Q: true }, b: { k: true, q: true } }
+        castlingRights: { w: { K: true, Q: true }, b: { k: true, q: true } },
+        enPassantTarget: null
     };
     await gameStateRef.set(initialGameState);
     return {success: true, message: "Game started successfully."}
