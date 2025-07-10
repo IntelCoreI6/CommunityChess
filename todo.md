@@ -5,7 +5,7 @@
 - [x] Initialize castlingRights and enPassantTarget in startGame function
 - [x] Fix "AI failed to make move" error
 - [ ] Prevent handleTurnChange from running multiple times for the same state
-- [ ] Fix pieceMovedByAI variable declaration (currently missing var/let/const)
+- [x] Fix pieceMovedByAI variable declaration (currently missing var/let/const)
 - [ ] Properly detect and handle game end conditions (checkmate, stalemate)
 
 ## Move Validation
