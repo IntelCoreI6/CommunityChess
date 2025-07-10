@@ -26,7 +26,7 @@ function isPathBlocked(startX, startY, endX, endY, boardState) {
 
     while (currentX !== endX || currentY !== endY) {
        // Check the array using [y][x] format
-       if (boardState[currentY] && boardState[currentY][currentX] !== null) {
+       if (boardState[currentY] && boardState[currentY][currentX] !== 0) {
             return true; // Path is blocked
         }
         currentX += x_direction;
@@ -100,38 +100,15 @@ function isMoveValid(fromX, fromY, toX, toY, boardState) {
     }
 
 function movePiece(fromX, fromY, toX, toY, boardState) {
-    // First get the piece
-    const pieceToMove = boardState[fromY]?.[fromX];
-    if (!pieceToMove) {
-        throw new Error(`No piece at position (${fromX},${fromY})`);
-    }
+    // First, get the piece from the original boardState
+    const pieceToMove = boardState[fromY][fromX];
     
-    // Create a guaranteed complete 8×8 board
-    const newBoardState = [
-        Array(8).fill(null),
-        Array(8).fill(null),
-        Array(8).fill(null),
-        Array(8).fill(null),
-        Array(8).fill(null),
-        Array(8).fill(null),
-        Array(8).fill(null),
-        Array(8).fill(null)
-    ];
+    // Then create a copy of the board
+    const newBoardState = JSON.parse(JSON.stringify(boardState));
     
-    // Copy all pieces from the original board
-    for (let y = 0; y < 8; y++) {
-        if (boardState[y]) {
-            for (let x = 0; x < 8; x++) {
-                if (boardState[y][x]) {
-                    newBoardState[y][x] = boardState[y][x];
-                }
-            }
-        }
-    }
-    
-    // Move the piece
+    // Move the piece on the copied board
     newBoardState[toY][toX] = pieceToMove;
-    newBoardState[fromY][fromX] = null;
+    newBoardState[fromY][fromX] = 0;
     
     return newBoardState;
 }
@@ -236,7 +213,7 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
 
         }
         log(`Winning move is ${winningMoveKey} with ${maxVotes} votes.`);
-        parts = winningMoveKey.split('-').map(part => parseInt(part, 10));
+        parts = winningMoveKey.split('-').map(Number);
         log(`parts: ${parts}, fromx_value ${parts[0]}`)
         const move = {
             fromX: parts[0],
@@ -244,10 +221,9 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
             toX: parts[2],
             toY: parts[3]
         };
-        log(`move object: ${move}`)
+        log("trying to move piece")
         try {
         // 4. Apply the winning move to the board using chess.js.
-        log("trying to move piece")
         newBoardState = movePiece(move.fromX, move.fromY, move.toX, move.toY, gameState.board)
         }
         catch(error) {
@@ -404,24 +380,14 @@ exports.startGame = onCall({ region: 'europe-west1' }, async(request) => {
         board: [
             ['br', 'bn', 'bb', 'bq', 'bk', 'bb', 'bn', 'br'],
             ['bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp'],
-            [null, null, null, null, null, null, null, null],
-            [null, null, null, null, null, null, null, null],
-            [null, null, null, null, null, null, null, null],
-            [null, null, null, null, null, null, null, null],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0, 0, 0, 0],
+
+            [0, 0, 0, 0, 0, 0, 0, 0],
             ['wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp'],
-            ['wr', 'wn', 'wb', 'wq', 'wk', 'wb', 'wn', 'wr']
-        ],
-        turn: 'w',
-        controlled: 'w',
-        castlingRights: { w: { kingSide: true, queenSide: true }, b: { kingSide: true, queenSide: true } },
-        moveHistory: [],
-        currentVotes: {},
-        fen: 'RNBQKBNR/PPPPPPPP/8/8/8/8/pppppppp/rnbqkbnr w KQkq - 0 1',
-        totalVotesInRound: 0,
-        roundEndsAt: roundEndsAt,
-        status: "VOTING",
-        lastMessage: "New game started. White to move"
-    };
+            ['wr', 'wn', 'wb', 'wq', 'wk', 'wb', 'wn', 'wr']]};
     await gameStateRef.set(initialGameState);
     return {success: true, message: "Game started successfully."}
 

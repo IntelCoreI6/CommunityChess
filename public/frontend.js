@@ -179,7 +179,7 @@ function display_voting (votes, total_votes){
         let percentage = total_votes > 0 ? Math.round((count * 100) / total_votes) : 0;
         panel.innerHTML = `
             <div class="vote-info">
-                <span class="vote-move">${fromX}${move[1]} ==> ${toX}${move[3]}</span>
+                <span class="vote-move">${fromX}${move[1]+1} ==> ${toX}${move[3]+1}</span>
                 <span class="vote-details">${count} vote(s) - ${percentage}%</span>
             </div>
             <div class="percentage-bar-background">
