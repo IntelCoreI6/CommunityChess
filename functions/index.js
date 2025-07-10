@@ -291,7 +291,7 @@ async function stockfish_api(fen, depth) {
         throw new Error(`Stockfish API returned an error or no best move. Response: ${JSON.stringify(data)}`);
     }
 
-    return data.bestmove.split(" ")[2];
+    return data.bestmove;
 }
 
 
@@ -466,7 +466,9 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
             log(fen)
             
             try {
-                const bestMove = await stockfish_api(fen, 15).split(" ")[1];
+                const stockfishResponse = await stockfish_api(fen, 15);
+                log("stockfishResponse:", stockfishResponse);
+                const bestMove = stockfishResponse.split(" ")[1];
                 log("bestmove:", bestMove);
             } catch (error) {
                 log(`Error occured while trying to fetch stockfish_api: ${error}`)
