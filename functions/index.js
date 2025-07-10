@@ -396,18 +396,18 @@ exports.castVote = onCall({ region: 'europe-west1' }, async (request) => {
 
 exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west1"}, async (event) => {
     const gameState = event.data.after.val();
-    const oldGameState = event.data.before.val();
 
     // Only act if the status has just been set to 'PROCESSING_MOVE'.
-    if (!gameState || gameState.status !== 'PROCESSING_MOVE' || oldGameState.status === 'PROCESSING_MOVE') {
+    if (!gameState || gameState.status !== 'PROCESSING_MOVE') {
         return null;
     }
 
     // --- AI's Turn ---
     if (gameState.turn !== gameState.controlled) {
-        logger.info(`AI's turn (${gameState.turn}). Running Stockfish.`);
+        log(`AI's turn (${gameState.turn}). Running Stockfish.`);
         try {
             const fen = boardToFen(gameState.board, gameState.turn, gameState.castlingRights, gameState.enPassantTarget);
+            log(fen)
             const stockfishPath = path.join(__dirname, "stockfish");
             const stockfish = spawn(stockfishPath);
             let bestMove = "";
@@ -458,7 +458,7 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
         } catch (error) {
             logger.error("Error during AI turn:", error);
             log("Error during AI turn:", error);
-            return event.data.after.ref.update({ status: 'ERROR', lastMessage: 'AI failed to make a move.' });
+            return event.data.after.ref.update({ status: 'ERROR', lastMessage: `Ai failed to make move: ${error}` });
         }
     }
     // --- Human's Turn ---
