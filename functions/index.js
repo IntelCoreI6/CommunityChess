@@ -45,10 +45,6 @@ function isMoveValid(fromX, fromY, toX, toY, boardState) {
     if (destinationPiece && destinationPiece[0] === color) {
         return false;
     }
-    if (color != piece[0]) {
-        console.log("moving the opponents piece, not allowed")
-    }
-
 
     if (type === "p") {
         const direction = color === 'w' ? -1 : 1;
@@ -104,22 +100,58 @@ function isMoveValid(fromX, fromY, toX, toY, boardState) {
     }
 
 function movePiece(fromX, fromY, toX, toY, boardState) {
-    const newBoardState = JSON.parse(JSON.stringify(boardState));
-    const pieceToMove = newBoardState[fromX, fromY];
-    const destinationPiece = boardState && boardState[toY] ? boardState[toY][toX] : null;
-    newBoardState[toY, toX] = pieceToMove
-    newBoardState[fromY, fromX] = null
+    // First get the piece
+    const pieceToMove = boardState[fromY]?.[fromX];
+    if (!pieceToMove) {
+        throw new Error(`No piece at position (${fromX},${fromY})`);
+    }
+    
+    // Create a guaranteed complete 8×8 board
+    const newBoardState = [
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null)
+    ];
+    
+    // Copy all pieces from the original board
+    for (let y = 0; y < 8; y++) {
+        if (boardState[y]) {
+            for (let x = 0; x < 8; x++) {
+                if (boardState[y][x]) {
+                    newBoardState[y][x] = boardState[y][x];
+                }
+            }
+        }
+    }
+    
+    // Move the piece
+    newBoardState[toY][toX] = pieceToMove;
+    newBoardState[fromY][fromX] = null;
+    
     return newBoardState;
 }
 
+async function log(...args) {
+    // Convert all arguments to a single string, handling objects and errors
+    const message = args.map(arg => {
+        if (typeof arg === 'object' && arg !== null) {
+            // Stringify objects to see their content, especially helpful for errors
+            return JSON.stringify(arg, Object.getOwnPropertyNames(arg));
+        }
+        return arg;
+    }).join(' '); // Join arguments with a space
 
-async function log(text) {
-    logger.info(text);
+    logger.info(message); // Log the full, detailed message to Cloud Logging
     const db = getDatabase();
     const gameStateRef = db.ref("/gamestate");
     try {
         await gameStateRef.update({
-            lastMessage: `SERVER: ${text}`
+            lastMessage: `SERVER: ${message}`
         });
     } catch (error) {
         logger.error("Failed to update lastMessage:", error);
@@ -129,16 +161,21 @@ async function scheduleRoundProcessing(roundEndsAt) {
     const client = new CloudTasksClient();
     const project = 'community-chess-7de3a'; // Your project ID
     const location = 'europe-west1'; // The region of your function
-    const queue = 'process-round-queue'; // A name for your queue
+    const queue = 'processRound-queue'; // A name for your queue
 
     const parent = client.queuePath(project, location, queue);
 
     const url = `https://europe-west1-community-chess-7de3a.cloudfunctions.net/processRound`;
+    
+    const serviceAccountEmail = `${project}@appspot.gserviceaccount.com`;
 
     const task = {
         httpRequest: {
             httpMethod: 'POST',
             url: url,
+            oidcToken: {
+                serviceAccountEmail : serviceAccountEmail
+            }
         },
         scheduleTime: {
             seconds: Math.floor(roundEndsAt / 1000)
@@ -150,6 +187,8 @@ async function scheduleRoundProcessing(roundEndsAt) {
         log(`Task scheduled to process round at ${new Date(roundEndsAt).toISOString()}`);
     } catch (error) {
         logger.error("Error scheduling task:", error);
+        log("Error scheduling task:", error);
+
     }
 }
 
@@ -160,8 +199,16 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
         const gameStateRef = db.ref("/gamestate");
         const gameStateSnap = await gameStateRef.once("value");
         const gameState = gameStateSnap.val();
+        let newBoardState = [];
+        let parts = [];
+
 
         // Add a check to prevent re-processing
+        if (!gameState) {
+            log("No game state found. Exiting.");
+            res.status(200).send("No game state found.");
+            return;
+        }
         if (gameState.status !== "VOTING") {
             log("Round already processed. Exiting.");
             res.status(200).send("Round already processed.");
@@ -171,17 +218,72 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
         // --- All the logic from your old processFinishedRounds function goes here ---
         const votes = gameState.currentVotes;
         if (!votes || Object.keys(votes).length === 0) {
-            // ... handle no votes
-        }
-        // ... find winning move, update board, etc.
-        
-        // Example of updating the board:
-        // const newBoardState = movePiece(...)
-        // await gameStateRef.update({ status: "PROCESSING_MOVE", board: newBoardState, ... });
+            return gameStateRef.update({
+                turn: gameState.turn === 'w' ? 'b' : 'w',
+                //roundEndsAt: Date.now() + 10000, // Stop the timer
+                status: "PROCESSING_MOVE",
+                lastMessage: "No votes were cast. Passing turn."
 
-        res.status(200).send("Round processed successfully.");
+            });
+        }
+        let winningMoveKey = "";
+        let maxVotes = 0;
+        for (const moveKey in votes) {
+          if (votes[moveKey] > maxVotes) {
+            winningMoveKey = moveKey;
+            maxVotes = votes[moveKey]
+          }
+
+        }
+        log(`Winning move is ${winningMoveKey} with ${maxVotes} votes.`);
+        parts = winningMoveKey.split('-').map(part => parseInt(part, 10));
+        log(`parts: ${parts}, fromx_value ${parts[0]}`)
+        const move = {
+            fromX: parts[0],
+            fromY: parts[1],
+            toX: parts[2],
+            toY: parts[3]
+        };
+        log(`move object: ${move}`)
+        try {
+        // 4. Apply the winning move to the board using chess.js.
+        log("trying to move piece")
+        newBoardState = movePiece(move.fromX, move.fromY, move.toX, move.toY, gameState.board)
+        }
+        catch(error) {
+            log("error while trying to move piece:", error)
+        }
+        
+
+        // 5. Check if the move was legal.
+        log("checking if move is legal")
+        if (isMoveValid(move.fromX, move.fromY, move.toX, move.toY, gameState.board) ==  false) {
+            log(`Winning move ${winningMoveKey} was illegal. Resetting round.`)
+            logger.error(`Winning move ${winningMoveKey} was illegal. Resetting round.`);
+            return gameStateRef.update({
+                currentVotes: {},
+                totalVotesInRound: 0,
+                roundEndsAt: Date.now() + 60000, // Give them another minute
+                lastMessage: `The winning move (${winningMoveKey}) was illegal. Please vote again.`
+            });
+        }
+        else {
+            log("valid move :check:")
+        }
+
+        log("Applying winning move and updating board state.");
+        // Update the gamestate with the new position.
+        return gameStateRef.update({
+            status: "PROCESSING_MOVE",
+            board: newBoardState,
+            turn: gameState.turn === 'w' ? 'b' : 'w',
+            lastMessage: `Community chose ${winningMoveKey}.`
+        });
+
     } catch (error) {
         logger.error("Error in processRound:", error);
+        // Log the actual error details, not just "error"
+        log("Error in processRound:", error.message, error.stack);
         res.status(500).send("Internal Server Error");
     }
 });
@@ -225,7 +327,7 @@ exports.castVote = onCall({ region: 'europe-west1' }, async (request) => {
     return { success: true };
 });
 
-exports.handleTurnChange = onValueWritten("/gamestate", async (event) => {
+exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west1"}, async (event) => {
     const gameState = event.data.after.val();
     const oldGameState = event.data.before.val();
 

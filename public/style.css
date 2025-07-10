@@ -1,67 +1,188 @@
-.block {
-    height: 50px;
-    width: 50px;
+/* General Body and Font Styles */
+body {
+    font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+    background-color: #f0f2f5;
+    color: #333;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
-.piece {
-    width: 50px;
-    height: 50px;
-    background-size: cover;
-    background-position: center;
+h1, h2 {
+    color: #1c1e21;
+    text-align: center;
 }
 
-
-.block.black {
-    background-color: rgb(75, 115, 153);
+/* Buttons */
+button {
+    background-color: #1877f2;
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    margin: 5px;
+    transition: background-color 0.2s;
 }
 
-.block.black:hover {
-    background-color: rgb(35, 65, 103);
+button:hover {
+    background-color: #166fe5;
 }
 
-.block.white {
-    background-color: rgb(234, 233, 210);
+/* Game Info Panel */
+.info-panel {
+    background-color: #fff;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    text-align: center;
+    width: 100%;
+    max-width: 950px;
 }
 
-.block.white:hover {
-    background-color: rgb(184, 183, 160);
+.info-panel p {
+    margin: 8px 0;
+    font-size: 16px;
+}
+
+.info-panel span {
+    font-weight: bold;
+    background-color: #e7f3ff;
+    color: #1877f2;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+#timer {
+    font-size: 24px;
+    font-weight: bold;
+    color: #333;
+    margin-top: 10px;
+}
+
+/* Main Layout */
+#main {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 30px;
+    width: 100%;
+    max-width: 1000px;
+}
+
+/* Chess Board */
+#board {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border: 2px solid #333;
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
 }
 
 .row {
-    height: 50px;
-    width: 100%;
     display: flex;
+}
+
+.block {
+    height: 60px;
+    width: 60px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    transition: background-color 0.2s;
+}
+
+.piece {
+    width: 90%;
+    height: 90%;
+    background-size: cover;
+    background-position: center;
+    cursor: grab;
+}
+
+.piece:active {
+    cursor: grabbing;
+}
+
+.block.black {
+    background-color: #769656;
+}
+
+.block.white {
+    background-color: #eeeed2;
+}
+
+.block:hover {
+    background-color: #baca44; /* A single highlight color for hover */
 }
 
 .label {
-    width: 50px;
-    height: 20px;
-    text-align: center;
-    padding: 17px 0;
-    color: black;
-    font: 16px Arial, sans-serif;
-}
-
-#board {
-    flex: 1;           
-    max-width: 600px;
-    margin-left: 20px; 
-}
-#main {
+    width: 60px;
+    height: 60px;
     display: flex;
-    justify-content: space-between; 
-    align-items: flex-start;
-    
-
+    justify-content: center;
+    align-items: center;
+    font-size: 14px;
+    color: #555;
+    user-select: none; /* Prevent text selection */
 }
+
+/* Voting Panel */
 #voting_panel {
-  width: 300px;     
-  padding-left: 20px;
+    background-color: #fff;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    width: 350px;
+    align-self: stretch; /* Make it the same height as the board */
+}
+
+#voting_panel h2 {
+    margin-top: 0;
+    font-size: 18px;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 10px;
+}
+
+#voting_panel_list {
+    margin-top: 15px;
+}
+
+.vote {
+    margin-bottom: 12px;
+    font-size: 14px;
+}
+
+.vote-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.vote-move {
+    font-weight: bold;
+}
+
+.vote-details {
+    color: #606770;
+}
+
+.percentage-bar-background {
+    width: 100%;
+    height: 12px;
+    background-color: #e9ebee;
+    border-radius: 6px;
+    overflow: hidden; /* Ensures the inner bar has rounded corners */
 }
 
 .percentage-bar {
-    height: 10px; /* Adjust the height as needed */
-    background-color: lightgreen; /* Choose your desired color */
-    display: inline-block; /* Make it sit next to the text */
-    margin-left: 5px; /* Add some spacing */
+    height: 100%;
+    background-color: #42b72a; /* A nice green */
+    border-radius: 6px;
+    transition: width 0.3s ease-in-out;
 }

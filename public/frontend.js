@@ -8,6 +8,7 @@ import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/
 let localGameState = {};
 let countdownInterval = null;
 let locallastMessage = null
+const letters = ["a", "b", "c", "d", "e", "f", "g", "h"];
 
 onValue(gameRef, (snapshot) => {
     const serverState = snapshot.val();
@@ -77,7 +78,6 @@ onValue(gameRef, (snapshot) => {
 //board creation
 let board = document.getElementById("board")
 
-const letters = ["a", "b", "c", "d", "e", "f", "g", "h"];
 console.log(board)
 
 for (let y = 0; y < 9; y++) { // Changed to 10 to accommodate numbers
@@ -168,15 +168,24 @@ board.addEventListener('click', function(event){
 function display_voting (votes, total_votes){
     let voting_panel = document.getElementById("voting_panel_list")
     voting_panel.innerHTML = '';
-    for (const vote in votes){
+    const sortedVotes = Object.entries(votes || {}).sort(([,a],[,b]) => b-a);
+    for (const vote in sortedVotes){
+        const move = sortedVotes[vote][0].split("-").map(Number)
+        const count = sortedVotes[vote][1]
+        const fromX = letters[move[0]];
+        const toX = letters[move[2]];
         let panel = document.createElement("div")
         panel.className = "vote"
-        let percentage = Math.round(votes[vote]*100/total_votes)
-        panel.textContent = `${vote} has ${votes[vote]} votes which is ${percentage}% of all votes`
-        let bar = document.createElement("div")
-        bar.className = "percentage-bar"
-        bar.style.width= `${percentage}%`
-        panel.appendChild(bar)
+        let percentage = total_votes > 0 ? Math.round((count * 100) / total_votes) : 0;
+        panel.innerHTML = `
+            <div class="vote-info">
+                <span class="vote-move">${fromX}${move[1]} ==> ${toX}${move[3]}</span>
+                <span class="vote-details">${count} vote(s) - ${percentage}%</span>
+            </div>
+            <div class="percentage-bar-background">
+                <div class="percentage-bar" style="width: ${percentage}%;"></div>
+            </div>
+        `;
         voting_panel.appendChild(panel)
     }
 }
