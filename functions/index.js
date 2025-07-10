@@ -9,6 +9,8 @@ const path = require("path");
 const { Chess } = require("chess.js");
 const { onRequest } = require("firebase-functions/v2/https");
 const { CloudTasksClient } = require('@google-cloud/tasks');
+const { secureHeapUsed } = require("crypto");
+const { error } = require("console");
 
 
 initializeApp();
@@ -241,6 +243,57 @@ function boardToFen(board, turn, castlingRights, enPassantTarget) {
     return fen;
 }
 
+async function stockfish(fen) {
+    const stockfishPath = path.join(__dirname, "stockfish");
+    const stockfish = spawn(stockfishPath);
+    let bestMove = "";
+    let allOutput = "";
+
+    stockfish.stdout.on("data", (data) => {
+        const output = data.toString();
+        allOutput += output;
+        const lines = allOutput.split('\n');
+        lines.forEach(line => {
+            if (line.startsWith("bestmove")) {
+            bestMove = line.split(" ")[1];
+                }
+        });
+        allOutput = lines[lines.length - 1];
+
+    });
+
+    await new Promise((resolve, reject) => {
+        stockfish.on("close", (code) => {
+            if (code === 0 && bestMove) {
+                resolve();
+            } else {
+                // Provide more details in the rejection error
+                reject(new Error(`Stockfish process exited with code ${code}. Best move was ${bestMove ? "found" : "not found"}.`));
+            }
+        });
+        stockfish.stdin.write(`position fen ${fen}\n`);
+        stockfish.stdin.write(`go movetime 1000\n`); // Ask stockfish to think for 1 second
+    });
+    return bestMove
+}
+
+async function stockfish_api(fen, depth) {
+    const apiUrl = `https://stockfish.online/api/s/v2.php?fen=${encodeURIComponent(fen)}&depth=${depth}`;
+    log("Calling Stockfish API:", apiUrl);
+
+    const response = await fetch(apiUrl);
+    if (!response.ok) {
+        throw new Error(`Stockfish API failed with status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    if (!data.success || !data.bestmove) {
+        throw new Error(`Stockfish API returned an error or no best move. Response: ${JSON.stringify(data)}`);
+    }
+
+    return data.bestmove;
+}
+
 
 exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) => {
     try {
@@ -309,10 +362,12 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
         if (isMoveValid(move.fromX, move.fromY, move.toX, move.toY, gameState.board) ==  false) {
             log(`Winning move ${winningMoveKey} was illegal. Resetting round.`)
             logger.error(`Winning move ${winningMoveKey} was illegal. Resetting round.`);
+            const roundEndsAt = Date.now() + 30000
+            await scheduleRoundProcessing(roundEndsAt)
             return gameStateRef.update({
                 currentVotes: {},
                 totalVotesInRound: 0,
-                roundEndsAt: Date.now() + 60000, // Give them another minute
+                roundEndsAt: roundEndsAt,
                 lastMessage: `The winning move (${winningMoveKey}) was illegal. Please vote again.`
             });
         }
@@ -396,9 +451,10 @@ exports.castVote = onCall({ region: 'europe-west1' }, async (request) => {
 
 exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west1"}, async (event) => {
     const gameState = event.data.after.val();
+    const oldGameState = event.data.before.val();
 
     // Only act if the status has just been set to 'PROCESSING_MOVE'.
-    if (!gameState || gameState.status !== 'PROCESSING_MOVE') {
+    if (!gameState || gameState.status !== 'PROCESSING_MOVE' || oldGameState.status === 'PROCESSING_MOVE') {
         return null;
     }
 
@@ -408,31 +464,22 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
         try {
             const fen = boardToFen(gameState.board, gameState.turn, gameState.castlingRights, gameState.enPassantTarget);
             log(fen)
-            const stockfishPath = path.join(__dirname, "stockfish");
-            const stockfish = spawn(stockfishPath);
-            let bestMove = "";
-
-            stockfish.stdout.on("data", (data) => {
-                const output = data.toString();
-                if (output.startsWith("bestmove")) {
-                    bestMove = output.split(" ")[1];
-                }
-            });
-
-            await new Promise((resolve, reject) => {
-                stockfish.on("close", (code) => code === 0 && bestMove ? resolve() : reject(new Error(`Stockfish failed.`)));
-                stockfish.stdin.write(`position fen ${fen}\n`);
-                stockfish.stdin.write("go movetime 2000\n");
-                stockfish.stdin.end();
-            });
-            log(bestMove)
+            
+            try {
+                const bestMove = stockfish_api(fen, 15);
+                log("bestmove", bestMove);
+            } catch (error) {
+                log(`Error occured while trying to fetch stockfish_api: ${error}`)
+            }
+            
             const fromX = bestMove.charCodeAt(0) - 'a'.charCodeAt(0);
             const fromY = 8 - parseInt(bestMove[1]);
             const toX = bestMove.charCodeAt(2) - 'a'.charCodeAt(0);
             const toY = 8 - parseInt(bestMove[3]);
 
             const aiMove = {fromX, fromY, toX, toY};
-            pieceMovedByAI = gameState.board[fromY][fromX]
+            log(aiMove)
+            const pieceMovedByAI = gameState.board[fromY][fromX]
             const newCastlingRights = updateCastlingRights(aiMove, pieceMovedByAI, gameState.castlingRights);
             
             let enPassantTargetForNextTurn = null;
@@ -444,11 +491,14 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
             }
             const newBoardState = movePiece(fromX, fromY, toX, toY, gameState.board);
             // AI has moved. Now it's the human's turn again. Start a new voting round.
+            const roundEndsAt = Date.now() + 30000
+            await scheduleRoundProcessing(roundEndsAt);
+            log("updating gamestate, with AI move")
             return event.data.after.ref.update({
                 status: 'VOTING',
                 board: newBoardState,
                 turn: gameState.turn === 'w' ? 'b' : 'w',
-                roundEndsAt: Date.now() + 60000,
+                roundEndsAt: roundEndsAt,
                 currentVotes: {},
                 totalVotesInRound: 0,
                 lastMessage: `AI moved ${bestMove}. Your turn to vote.`,
@@ -483,7 +533,7 @@ exports.startGame = onCall({ region: 'europe-west1' }, async(request) => {
     const roundEndsAt = Date.now() + roundDurationMs;
     await scheduleRoundProcessing(roundEndsAt);
 
-const initialGameState = {
+    const initialGameState = {
         board: [
             ['br', 'bn', 'bb', 'bq', 'bk', 'bb', 'bn', 'br'],
             ['bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp'],
