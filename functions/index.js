@@ -466,8 +466,8 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
             log(fen)
             
             try {
-                const bestMove = await stockfish_api(fen, 15);
-                log("bestmove", bestMove);
+                const bestMove = await stockfish_api(fen, 15).split(" ")[1];
+                log("bestmove:", bestMove);
             } catch (error) {
                 log(`Error occured while trying to fetch stockfish_api: ${error}`)
             }
