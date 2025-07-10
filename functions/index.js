@@ -26,7 +26,7 @@ function isPathBlocked(startX, startY, endX, endY, boardState) {
 
     while (currentX !== endX || currentY !== endY) {
        // Check the array using [y][x] format
-       if (boardState[currentY] && boardState[currentY][currentX] !== 0) {
+       if (boardState[currentY] && boardState[currentY][currentX] !== null) {
             return true; // Path is blocked
         }
         currentX += x_direction;
@@ -100,15 +100,38 @@ function isMoveValid(fromX, fromY, toX, toY, boardState) {
     }
 
 function movePiece(fromX, fromY, toX, toY, boardState) {
-    // First, get the piece from the original boardState
-    const pieceToMove = boardState[fromY][fromX];
+    // First get the piece
+    const pieceToMove = boardState[fromY]?.[fromX];
+    if (!pieceToMove) {
+        throw new Error(`No piece at position (${fromX},${fromY})`);
+    }
     
-    // Then create a copy of the board
-    const newBoardState = JSON.parse(JSON.stringify(boardState));
+    // Create a guaranteed complete 8×8 board
+    const newBoardState = [
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null),
+        Array(8).fill(null)
+    ];
     
-    // Move the piece on the copied board
+    // Copy all pieces from the original board
+    for (let y = 0; y < 8; y++) {
+        if (boardState[y]) {
+            for (let x = 0; x < 8; x++) {
+                if (boardState[y][x]) {
+                    newBoardState[y][x] = boardState[y][x];
+                }
+            }
+        }
+    }
+    
+    // Move the piece
     newBoardState[toY][toX] = pieceToMove;
-    newBoardState[fromY][fromX] = 0;
+    newBoardState[fromY][fromX] = null;
     
     return newBoardState;
 }
@@ -213,7 +236,7 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
 
         }
         log(`Winning move is ${winningMoveKey} with ${maxVotes} votes.`);
-        parts = winningMoveKey.split('-').map(Number);
+        parts = winningMoveKey.split('-').map(part => parseInt(part, 10));
         log(`parts: ${parts}, fromx_value ${parts[0]}`)
         const move = {
             fromX: parts[0],
@@ -221,9 +244,10 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
             toX: parts[2],
             toY: parts[3]
         };
-        log("trying to move piece")
+        log(`move object: ${move}`)
         try {
         // 4. Apply the winning move to the board using chess.js.
+        log("trying to move piece")
         newBoardState = movePiece(move.fromX, move.fromY, move.toX, move.toY, gameState.board)
         }
         catch(error) {
@@ -249,27 +273,9 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
 
         log("Applying winning move and updating board state.");
         // Update the gamestate with the new position.
-        const columns = "abcdefgh";
-        const rows = "87654321";
-
-        // Create a Chess.js instance with the current FEN
-        const chess = new Chess(gameState.fen);
-
-        // Convert our coordinates to algebraic notation
-        const fromSquare = columns[move.fromX] + rows[move.fromY];
-        const toSquare = columns[move.toX] + rows[move.toY];
-
-        // Make the move on the chess.js board
-        chess.move({
-            from: fromSquare,
-            to: toSquare,
-            // Add promotion to queen if this is a pawn reaching the last rank
-            promotion: 'q'
-        });
         return gameStateRef.update({
             status: "PROCESSING_MOVE",
             board: newBoardState,
-            fen: chess.fen(),
             turn: gameState.turn === 'w' ? 'b' : 'w',
             lastMessage: `Community chose ${winningMoveKey}.`
         });
@@ -398,10 +404,10 @@ exports.startGame = onCall({ region: 'europe-west1' }, async(request) => {
         board: [
             ['br', 'bn', 'bb', 'bq', 'bk', 'bb', 'bn', 'br'],
             ['bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp'],
-            [0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0],
-            [0, 0, 0, 0, 0, 0, 0, 0],
+            [null, null, null, null, null, null, null, null],
+            [null, null, null, null, null, null, null, null],
+            [null, null, null, null, null, null, null, null],
+            [null, null, null, null, null, null, null, null],
             ['wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp'],
             ['wr', 'wn', 'wb', 'wq', 'wk', 'wb', 'wn', 'wr']
         ],
