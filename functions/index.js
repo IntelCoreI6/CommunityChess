@@ -168,6 +168,48 @@ async function scheduleRoundProcessing(roundEndsAt) {
 
     }
 }
+// ... (put this near your other helper functions like isMoveValid) ...
+
+function boardToFen(board, turn, castlingRights) {
+    let fen = '';
+    for (let y = 0; y < 8; y++) {
+        let empty = 0;
+        for (let x = 0; x < 8; x++) {
+            const piece = board[y][x];
+            if (piece === 0) {
+                empty++;
+            } else {
+                if (empty > 0) {
+                    fen += empty;
+                    empty = 0;
+                }
+                const color = piece[0];
+                const type = piece[1];
+                fen += (color === 'w' ? type.toUpperCase() : type.toLowerCase());
+            }
+        }
+        if (empty > 0) {
+            fen += empty;
+        }
+        if (y < 7) {
+            fen += '/';
+        }
+    }
+
+    fen += ` ${turn}`;
+
+    let castling = '';
+    if (castlingRights.w.K) castling += 'K';
+    if (castlingRights.w.Q) castling += 'Q';
+    if (castlingRights.b.k) castling += 'k';
+    if (castlingRights.b.q) castling += 'q';
+    fen += ` ${castling || '-'}`;
+    
+    // For simplicity, we'll use placeholders for en passant, halfmove, and fullmove
+    fen += ' - 0 1';
+    return fen;
+}
+
 
 exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) => {
     try {
@@ -249,11 +291,14 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
 
         log("Applying winning move and updating board state.");
         // Update the gamestate with the new position.
+
         return gameStateRef.update({
             status: "PROCESSING_MOVE",
             board: newBoardState,
             turn: gameState.turn === 'w' ? 'b' : 'w',
-            lastMessage: `Community chose ${winningMoveKey}.`
+            lastMessage: `Community chose ${winningMoveKey}.`,
+            currentVotes: {},
+            totalVotesInRound: 0,
         });
 
     } catch (error) {
@@ -376,7 +421,7 @@ exports.startGame = onCall({ region: 'europe-west1' }, async(request) => {
     const roundEndsAt = Date.now() + roundDurationMs;
     await scheduleRoundProcessing(roundEndsAt);
 
-    const initialGameState = {
+const initialGameState = {
         board: [
             ['br', 'bn', 'bb', 'bq', 'bk', 'bb', 'bn', 'br'],
             ['bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp', 'bp'],
@@ -384,10 +429,18 @@ exports.startGame = onCall({ region: 'europe-west1' }, async(request) => {
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
             [0, 0, 0, 0, 0, 0, 0, 0],
-
-            [0, 0, 0, 0, 0, 0, 0, 0],
             ['wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp', 'wp'],
-            ['wr', 'wn', 'wb', 'wq', 'wk', 'wb', 'wn', 'wr']]};
+            ['wr', 'wn', 'wb', 'wq', 'wk', 'wb', 'wn', 'wr'] // <-- This was the extra 9th row, now removed
+        ],
+        turn: 'w',
+        controlled: 'w', // The color the community plays
+        status: "VOTING",
+        lastMessage: "New game started. White to move.",
+        roundEndsAt: roundEndsAt,
+        currentVotes: {},
+        totalVotesInRound: 0,
+        castlingRights: { w: { K: true, Q: true }, b: { k: true, q: true } }
+    };
     await gameStateRef.set(initialGameState);
     return {success: true, message: "Game started successfully."}
 
