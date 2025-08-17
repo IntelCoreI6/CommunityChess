@@ -348,4 +348,45 @@ function getValidMoves(piece, fromX, fromY, boardState) {
 
 
 
+// --- Move generation helpers ---
+function getMovesForSquare(fromX, fromY, boardState) {
+    const piece = boardState && boardState[fromY] ? boardState[fromY][fromX] : null;
+    if (!piece) return [];
+    const moves = [];
+    for (let toY = 0; toY < 8; toY++) {
+        for (let toX = 0; toX < 8; toX++) {
+            if (toX === fromX && toY === fromY) continue;
+            if (isMoveValid(fromX, fromY, toX, toY, boardState)) {
+                moves.push({ fromX, fromY, toX, toY });
+            }
+        }
+    }
+    return moves;
+}
+
+function getAllPossibleMoves(boardState, turn) {
+    const allMoves = [];
+    for (let y = 0; y < 8; y++) {
+        for (let x = 0; x < 8; x++) {
+            const piece = boardState && boardState[y] ? boardState[y][x] : null;
+            if (piece && piece[0] === turn) {
+                allMoves.push(...getMovesForSquare(x, y, boardState));
+            }
+        }
+    }
+    return allMoves;
+}
+
+// Optional: quick debug helper in console
+window.listAllMoves = function () {
+    if (!localGameState || !localGameState.board) {
+        console.warn("No local game state available yet.");
+        return [];
+    }
+    const moves = getAllPossibleMoves(localGameState.board, localGameState.turn);
+    console.log("All moves for", localGameState.turn, moves);
+    return moves;
+};
+
+
 establishPresence();

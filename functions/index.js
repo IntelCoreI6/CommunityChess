@@ -248,6 +248,35 @@ function boardToFen(board, turn, castlingRights, enPassantTarget) {
     return fen;
 }
 
+// --- Game end evaluation using chess.js ---
+function evaluateGameEnd(board, turn, castlingRights, enPassantTarget) {
+    const fen = boardToFen(board, turn, castlingRights, enPassantTarget);
+    try {
+        const chess = new Chess(fen);
+        const inCheck = chess.isCheck ? chess.isCheck() : (chess.in_check ? chess.in_check() : false);
+        const isMate = chess.isCheckmate ? chess.isCheckmate() : (chess.in_checkmate ? chess.in_checkmate() : false);
+        const isStale = chess.isStalemate ? chess.isStalemate() : (chess.in_stalemate ? chess.in_stalemate() : false);
+        const isInsufficient = chess.isInsufficientMaterial ? chess.isInsufficientMaterial() : (chess.insufficient_material ? chess.insufficient_material() : false);
+        const isThreefold = chess.isThreefoldRepetition ? chess.isThreefoldRepetition() : (chess.in_threefold_repetition ? chess.in_threefold_repetition() : false);
+        let winner = null;
+        let reason = null;
+        if (isMate) {
+            winner = turn === 'w' ? 'b' : 'w';
+            reason = 'checkmate';
+        } else if (isStale) {
+            reason = 'stalemate';
+        } else if (isInsufficient) {
+            reason = 'insufficient_material';
+        } else if (isThreefold) {
+            reason = 'threefold_repetition';
+        }
+        return { gameOver: isMate || isStale || isInsufficient || isThreefold, inCheck, isMate, isStale, isInsufficient, isThreefold, winner, reason, fen };
+    } catch (e) {
+        logger.error("Failed to evaluate FEN with chess.js", e);
+        return { gameOver: false, inCheck: false, isMate: false, isStale: false, isInsufficient: false, isThreefold: false, winner: null, reason: null, fen };
+    }
+}
+
 async function stockfish(fen) {
     const stockfishPath = path.join(__dirname, "stockfish");
     const stockfish = spawn(stockfishPath);
@@ -463,6 +492,18 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
         return null;
     }
 
+    // First, check if the current position (with side to move) is already game over
+    const preStatus = evaluateGameEnd(gameState.board, gameState.turn, gameState.castlingRights, gameState.enPassantTarget);
+    if (preStatus.gameOver) {
+        await log(`Game over detected before turn processing. Reason: ${preStatus.reason}, winner: ${preStatus.winner || 'draw'}. FEN: ${preStatus.fen}`);
+        return event.data.after.ref.update({
+            status: 'GAME_OVER',
+            lastMessage: preStatus.reason === 'checkmate' ? `Checkmate. ${(preStatus.winner === 'w' ? 'White' : preStatus.winner === 'b' ? 'Black' : 'None')} wins.` : `Game over: ${preStatus.reason}.`,
+            winner: preStatus.winner || null,
+            result: preStatus.reason
+        });
+    }
+
     // --- AI's Turn ---
     if (gameState.turn !== gameState.controlled) {
         log(`AI's turn (${gameState.turn}). Running Stockfish.`);
@@ -493,14 +534,31 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
                 log("AI created new en passant target:", enPassantTargetForNextTurn);
             }
             const newBoardState = movePiece(fromX, fromY, toX, toY, gameState.board);
-            // AI has moved. Now it's the human's turn again. Start a new voting round.
-            const roundEndsAt = Date.now() + roundLength
+            // After AI move, check for game end for the next player
+            const nextTurn = gameState.turn === 'w' ? 'b' : 'w';
+            const postStatus = evaluateGameEnd(newBoardState, nextTurn, newCastlingRights, enPassantTargetForNextTurn);
+            if (postStatus.gameOver) {
+                await log(`Game over after AI move ${bestMove}. Reason: ${postStatus.reason}, winner: ${postStatus.winner || 'draw'}. FEN: ${postStatus.fen}`);
+                return event.data.after.ref.update({
+                    status: 'GAME_OVER',
+                    board: newBoardState,
+                    turn: nextTurn,
+                    lastMessage: postStatus.reason === 'checkmate' ? `Checkmate. ${(postStatus.winner === 'w' ? 'White' : postStatus.winner === 'b' ? 'Black' : 'None')} wins.` : `Game over: ${postStatus.reason}.`,
+                    winner: postStatus.winner || null,
+                    result: postStatus.reason,
+                    castlingRights: newCastlingRights,
+                    enPassantTarget: enPassantTargetForNextTurn,
+                    currentVotes: {},
+                    totalVotesInRound: 0
+                });
+            }
+            // Not game over, continue normal flow
+            const roundEndsAt = Date.now() + 30000;
             await scheduleRoundProcessing(roundEndsAt);
-            log("updating gamestate, with AI move")
             return event.data.after.ref.update({
                 status: 'VOTING',
                 board: newBoardState,
-                turn: gameState.turn === 'w' ? 'b' : 'w',
+                turn: nextTurn,
                 roundEndsAt: roundEndsAt,
                 currentVotes: {},
                 totalVotesInRound: 0,
