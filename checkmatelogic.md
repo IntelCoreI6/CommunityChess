@@ -1,0 +1,2 @@
+- first write a function that get's all the legal moves
+- secondly i check each of those moves 

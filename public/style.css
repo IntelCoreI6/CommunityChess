@@ -102,7 +102,8 @@ button:hover {
     height: 90%;
     background-size: cover;
     background-position: center;
-    cursor: grab;
+    pointer-events: none;
+
 }
 
 .piece:active {

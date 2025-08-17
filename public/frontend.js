@@ -3,12 +3,14 @@ import { db, gameRef, functions } from "./firebase-init.js";
 import { ref, onValue, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 // In public/backend.js, bij je andere imports
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
-
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { onDisconnect, set} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
 let localGameState = {};
 let countdownInterval = null;
 let locallastMessage = null
 const letters = ["a", "b", "c", "d", "e", "f", "g", "h"];
+const auth = getAuth();
 
 onValue(gameRef, (snapshot) => {
     const serverState = snapshot.val();
@@ -156,11 +158,27 @@ board.addEventListener('click', function(event){
 
 
         }
+        else {
+            console.log("LOCAL: invalid move ")
+        }
         selectedSquare = null; // Reset selection
     }
 });
 
-
+async function establishPresence() {
+    try {
+        const userCredential = await signInAnonymously(auth);
+        const uid = userCredential.user.uid;
+        const presenceRef = ref(db, "presence/" +uid);
+        await set(presenceRef, {
+            online: true,
+            hasVoted: false
+        });
+        onDisconnect(presenceRef).remove();
+    } catch (error) {
+        console.error("Auth error:", error);
+    }
+}
 
 
 
@@ -245,10 +263,6 @@ function isMoveValid(fromX, fromY, toX, toY, boardState) {
     if (destinationPiece && destinationPiece[0] === color) {
         return false;
     }
-    if (color != piece[0]) {
-        console.log("moving the opponents piece, not allowed")
-    }
-
 
     if (type === "p") {
         const direction = color === 'w' ? -1 : 1;
@@ -296,7 +310,7 @@ function isMoveValid(fromX, fromY, toX, toY, boardState) {
         const dy = Math.abs(toY - fromY);
         return (dx === 1 && dy === 2) || (dx === 2 && dy === 1);
     }
-
+    console.log(`no valid move found, desination piece: ${destinationPiece}`)
     return false;
 
 
@@ -304,8 +318,34 @@ function isMoveValid(fromX, fromY, toX, toY, boardState) {
     }
 
 
+function getValidMoves(piece, fromX, fromY, boardState) {
+    const type = piece[1];
+    const color = piece[0]
+    let moves = []
+    if (type === "p") {
+        const direction = color === 'w' ? -1 : 1;
+        const startRow = color === 'w' ? 6 : 1;
 
-const play_against_ai_btn = document.getElementById("play-AI-btn")
-play_against_ai_btn.addEventListener("click", function() {
-  
-});
+        moves.push({toX: fromX, toY:fromY+1, capture: false})
+        // 2-square move from start
+        if (fromY === startRow) {
+            const toX = fromX
+            const toY = fromY + 2
+            const destinationPiece = boardState && boardState[toY] ? boardState[toY][toX] : null;
+
+            // Check if path is blocked for the 2-square move
+            if ((boardState[fromY + direction] && !boardState[fromY + direction][fromX]) && !destinationPiece) {
+                moves.push({toX: toX, toY: toY, capture: false})
+            }
+        }
+        // Capture move
+        if (Math.abs(fromX - toX) === 1 && toY === fromY + direction && destinationPiece) {
+            return true;
+        }
+    }
+
+}
+
+
+
+establishPresence();

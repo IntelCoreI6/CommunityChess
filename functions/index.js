@@ -13,6 +13,11 @@ const { secureHeapUsed } = require("crypto");
 const { error } = require("console");
 
 
+
+
+const roundTimer = (10 *100)
+
+
 initializeApp();
 
 
@@ -290,8 +295,9 @@ async function stockfish_api(fen, depth) {
     if (!data.success || !data.bestmove) {
         throw new Error(`Stockfish API returned an error or no best move. Response: ${JSON.stringify(data)}`);
     }
-
-    return data.bestmove;
+    returned_data =data.bestmove.split(" ")[1];
+    log(returned_data)
+    return returned_data;
 }
 
 
@@ -323,7 +329,6 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
         if (!votes || Object.keys(votes).length === 0) {
             return gameStateRef.update({
                 turn: gameState.turn === 'w' ? 'b' : 'w',
-                //roundEndsAt: Date.now() + 10000, // Stop the timer
                 status: "PROCESSING_MOVE",
                 lastMessage: "No votes were cast. Passing turn."
 
@@ -362,7 +367,7 @@ exports.processRound = onRequest({ region: "europe-west1" }, async (req, res) =>
         if (isMoveValid(move.fromX, move.fromY, move.toX, move.toY, gameState.board) ==  false) {
             log(`Winning move ${winningMoveKey} was illegal. Resetting round.`)
             logger.error(`Winning move ${winningMoveKey} was illegal. Resetting round.`);
-            const roundEndsAt = Date.now() + 30000
+            const roundEndsAt = Date.now() + roundLength
             await scheduleRoundProcessing(roundEndsAt)
             return gameStateRef.update({
                 currentVotes: {},
@@ -464,15 +469,11 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
         try {
             const fen = boardToFen(gameState.board, gameState.turn, gameState.castlingRights, gameState.enPassantTarget);
             log(fen)
-            
-            try {
-                const stockfishResponse = await stockfish_api(fen, 15);
-                log("stockfishResponse:", stockfishResponse);
-                const bestMove = stockfishResponse.split(" ")[1];
-                log("bestmove:", bestMove);
-            } catch (error) {
-                log(`Error occured while trying to fetch stockfish_api: ${error}`)
-            }
+
+            const stockfishResponse = await stockfish_api(fen, 15);
+            log("stockfishResponse:", stockfishResponse);
+            const bestMove = stockfishResponse
+            log("bestmove:", bestMove);
             
             const fromX = bestMove.charCodeAt(0) - 'a'.charCodeAt(0);
             const fromY = 8 - parseInt(bestMove[1]);
@@ -480,7 +481,7 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
             const toY = 8 - parseInt(bestMove[3]);
 
             const aiMove = {fromX, fromY, toX, toY};
-            log(aiMove)
+            log("aiMove:", aiMove)
             const pieceMovedByAI = gameState.board[fromY][fromX]
             const newCastlingRights = updateCastlingRights(aiMove, pieceMovedByAI, gameState.castlingRights);
             
@@ -493,7 +494,7 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
             }
             const newBoardState = movePiece(fromX, fromY, toX, toY, gameState.board);
             // AI has moved. Now it's the human's turn again. Start a new voting round.
-            const roundEndsAt = Date.now() + 30000
+            const roundEndsAt = Date.now() + roundLength
             await scheduleRoundProcessing(roundEndsAt);
             log("updating gamestate, with AI move")
             return event.data.after.ref.update({
@@ -517,7 +518,7 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
     else {
         logger.info(`Human player's turn (${gameState.turn}). Starting new vote timer.`);
         // The move has been processed. Now start the next voting round.
-        const roundEndsAt = Date.now() + 60000;
+        const roundEndsAt = Date.now() + roundTimer;
         await scheduleRoundProcessing(roundEndsAt);
         return event.data.after.ref.update({
             status: 'VOTING',
@@ -531,8 +532,7 @@ exports.handleTurnChange = onValueWritten({ref:"/gamestate", region:"europe-west
 exports.startGame = onCall({ region: 'europe-west1' }, async(request) => {
     const db = getDatabase();
     const gameStateRef = db.ref("/gamestate");
-    const roundDurationMs = 10000
-    const roundEndsAt = Date.now() + roundDurationMs;
+    const roundEndsAt = Date.now() + roundLength;
     await scheduleRoundProcessing(roundEndsAt);
 
     const initialGameState = {
@@ -564,3 +564,20 @@ exports.startGame = onCall({ region: 'europe-west1' }, async(request) => {
 
 });
 
+
+exports.Authenticate = onCall({ region: 'europe-west1' }, async (request) => {
+    const uid = request.auth?.uid || ("user_" + Math.random().toString(36).slice(2));
+    const db = getDatabase();
+    const presenceRef = db.ref("presence/" + uid);
+    await presenceRef.set({ online: true, lastLogin: Date.now() });
+    return { uid };
+});
+
+
+exports.Leave = onCall({ region: 'europe-west1' }, async (request) => {
+    const uid = request.auth?.uid || request.data.uid;
+    const db = getDatabase();
+    const presenceRef = db.ref("presence/" + uid);
+    await presenceRef.remove();
+    return { success: true };
+});
